@@ -44,6 +44,7 @@ EPOCHS = 80
 LR = 1e-3
 WEIGHT_DECAY = 1e-4
 NUM_WORKERS = 0 #FIX!!!!!!!!!!!
+MODE = "diff"   # "single" | "concat" | "diff"
 
 RUN_DIR = os.path.join("runs_ref", time.strftime("%Y%m%d_%H%M%S_ref"))
 os.makedirs(RUN_DIR, exist_ok=True)
@@ -57,7 +58,7 @@ def save_label_stats(ds: LaserDatasetRef, path: str):
             "std": ds.global_stats.std,
         },
         "img_size": ds.img_size,
-        "mode": "ref_concat_6ch",
+        "mode": MODE,
         "train_seqs": TRAIN_SEQS,
         "val_seqs": VAL_SEQS,
     }
@@ -80,10 +81,10 @@ def main():
     print("IMG_SIZE:", IMG_SIZE, "| AUGMENT:", AUGMENT)
 
     train_ds = LaserDatasetRef(
-        DATA_ROOT, TRAIN_SEQS, img_size=IMG_SIZE, label_norm=LABEL_NORM, augment=AUGMENT
+        DATA_ROOT, TRAIN_SEQS, img_size=IMG_SIZE, label_norm=LABEL_NORM, augment=AUGMENT, mode=MODE
     )
     val_ds = LaserDatasetRef(
-        DATA_ROOT, VAL_SEQS, img_size=IMG_SIZE, label_norm=LABEL_NORM, augment=False
+        DATA_ROOT, VAL_SEQS, img_size=IMG_SIZE, label_norm=LABEL_NORM, augment=False, mode=MODE
     )
 
     print("Train seqs:", TRAIN_SEQS, "n=", len(train_ds))
@@ -105,7 +106,8 @@ def main():
         num_workers=NUM_WORKERS, pin_memory=pin
     )
 
-    model = LaserNet(in_ch=6).to(device)
+    in_ch = 3 if MODE in ["single", "diff"] else 6
+    model = LaserNet(in_channels=in_ch).to(device)
     criterion = nn.SmoothL1Loss(beta=1.0)
     optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
 

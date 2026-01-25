@@ -28,16 +28,8 @@ class LaserDatasetRef(Dataset):
     Expected folder layout (train2):
       train2/
         seq1.csv ... seq5.csv
-        seq1/
-          seq1_start 1.tga
-          seq1_1 1.tga
-          ...
-        seq2/
-          seq2_start 1.tga
-          seq2_0 1.tga
-          seq2_1 1.tga
-          ...
-
+        seq1 >seq1_start 1.tga etc
+        seq2> esq2_0 1.tga etc
     Returns:
       x: [6,H,W] normalized to [-1,1]
       y_norm: [2] normalized by label_norm
@@ -55,6 +47,7 @@ class LaserDatasetRef(Dataset):
         label_norm: str = "global",    # "global" | "none"
         strict: bool = False,
         augment: bool = False,         # keep OFF for now
+        mode: str = "single",  # "single" | "concat" | "diff"
     ):
         self.root = root
         self.seqs = list(seqs)
@@ -64,6 +57,7 @@ class LaserDatasetRef(Dataset):
         self.label_norm = label_norm
         self.strict = strict
         self.augment = augment
+        self.mode = mode
 
         # Base transform (same for ref + problem)
         self.base_transform = T.Compose([
@@ -153,18 +147,29 @@ class LaserDatasetRef(Dataset):
         return (y - self.global_stats.mean) / self.global_stats.std
 
     def __getitem__(self, idx: int):
-        problem_path, y_raw, seq = self.samples[idx]
+        img_path, y_raw, seq = self.samples[idx]
 
-        problem_img = Image.open(problem_path).convert("RGB")
-        if self.augment:
-            p_x = self.problem_transform_aug(problem_img)
+        # load current frame
+        img = Image.open(img_path).convert("RGB")
+        x = self.transform(img)
+
+        # reference image
+        ref_path = os.path.join(self.img_root, seq, f"{seq}_start 1.tga")
+        ref_img = Image.open(ref_path).convert("RGB")
+        ref = self.transform(ref_img)
+
+        if self.mode == "single":
+            inp = x
+
+        elif self.mode == "concat":
+            inp = torch.cat([x, ref], dim=0)  # 6 channels
+
+        elif self.mode == "diff":
+            inp = x - ref  # 3 channels difference image
+
         else:
-            p_x = self.base_transform(problem_img)
+            raise ValueError(f"Unknown mode {self.mode}")
 
-        r_x = self.ref_tensor_by_seq[seq]  # [3,H,W], stable per seq
+        y_norm = self._norm_label(y_raw, seq)
+        return inp, y_norm, seq, y_raw
 
-        # 6-channel input
-        x = torch.cat([p_x, r_x], dim=0)  # [6,H,W]
-
-        y_norm = self._norm_label(y_raw)
-        return x, y_norm, seq, y_raw

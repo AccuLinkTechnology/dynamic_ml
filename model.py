@@ -4,9 +4,9 @@ import torch.nn.functional as F
 
 
 class LaserNet(nn.Module):
-    def __init__(self, in_ch: int = 6):
+    def __init__(self, in_channels=3):
         super().__init__()
-        self.conv1 = nn.Conv2d(in_ch, 16, kernel_size=5, stride=2, padding=2)
+        self.conv1 = nn.Conv2d(in_channels, 16, kernel_size=5, stride=2, padding=2)
         self.conv2 = nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1)
         self.conv3 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
         self.pool = nn.AdaptiveAvgPool2d((1, 1))
