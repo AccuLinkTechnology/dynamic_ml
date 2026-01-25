@@ -18,7 +18,7 @@ import torch
 import torchvision.transforms as T
 from PIL import Image
 
-from model import LaserNet
+from _model import LaserNet
 
 
 # -------------------------

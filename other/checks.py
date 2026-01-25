@@ -54,7 +54,7 @@ def check3():
     plt.show()
 
 def check4():
-    from dataset2 import LaserDataset
+    from _dataset2 import LaserDataset
     import torch
 
     DATA_ROOT = "/home/nvidia/Documents/kam_ml"
@@ -78,7 +78,7 @@ def check4():
 
 def check5():
     import torch
-    from model import LaserNet
+    from _model import LaserNet
 
     model = LaserNet()
 

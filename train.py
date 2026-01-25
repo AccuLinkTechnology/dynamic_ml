@@ -1,142 +1,128 @@
+import os
 import time
-from typing import Dict, List, Tuple
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, ConcatDataset, Subset
+from torch.utils.data import DataLoader
 
-from dataset2 import LaserDataset
+from dataset2 import LaserDatasetRef, DEFAULT_IMG_SIZE
 from model import LaserNet
+
+
+def pick_data_root() -> str:
+    # Prefer container-mounted path if present
+    candidates = [
+        "/workspace/dynamic_ml/train2",
+        "/home/nvidia/Documents/dynamic_ml/train2",
+        "/home/nvidia/Documents/kam_ml/train2",
+    ]
+    for c in candidates:
+        if os.path.isdir(c):
+            return c
+    # fallback: current working directory relative
+    if os.path.isdir("train2"):
+        return os.path.abspath("train2")
+    raise FileNotFoundError("Could not find train2 directory in known locations.")
 
 
 # -------------------------
 # CONFIG
 # -------------------------
-DATA_ROOT = "/home/nvidia/Documents/dynamic_ml/train2"
-SEQS = ["seq1", "seq2", "seq3", "seq4", "seq5"]
+DATA_ROOT = pick_data_root()
 
-# Validation strategy:
-#   "holdout_seq"   : train on TRAIN_SEQS, validate on VAL_SEQS (honest; )
-#   "per_seq_split" : 80/20 split inside each seq then concat (fast; optimistic esp. raster)
-VAL_MODE = "holdout_seq"
-
-# With seq1 much larger, a good first test is: train on seq1-4, validate on seq5.
 TRAIN_SEQS = ["seq1", "seq2", "seq3", "seq4"]
 VAL_SEQS = ["seq5"]
 
-LABEL_NORM = "global"  # "global" | "per_seq" | "none"
+IMG_SIZE = (640, 360)        # your current preference
+# IMG_SIZE = DEFAULT_IMG_SIZE  # or go back to 320x180
+
+LABEL_NORM = "global"
+AUGMENT = False              # keep OFF for now
 
 BATCH_SIZE = 8
 EPOCHS = 80
 LR = 1e-3
 WEIGHT_DECAY = 1e-4
 NUM_WORKERS = 2
-SEED = 42
+
+RUN_DIR = os.path.join("runs_ref", time.strftime("%Y%m%d_%H%M%S_ref"))
+os.makedirs(RUN_DIR, exist_ok=True)
 
 
-def split_per_seq(full_ds: LaserDataset, val_frac: float = 0.2) -> Tuple[ConcatDataset, ConcatDataset]:
-    """
-    Split indices within each sequence so both train/val contain all sequences.
-    NOTE: for raster data, this can be overly optimistic due to near-duplicates.
-    """
-    g = torch.Generator().manual_seed(SEED)
-    train_parts, val_parts = [], []
-
-    idx_by_seq: Dict[str, List[int]] = {s: [] for s in full_ds.seqs}
-    for i, (_path, _label, seq) in enumerate(full_ds.samples):
-        idx_by_seq[seq].append(i)
-
-    for seq, idxs in idx_by_seq.items():
-        if len(idxs) == 0:
-            continue
-        n_total = len(idxs)
-        n_val = max(1, int(val_frac * n_total))
-        perm = torch.randperm(n_total, generator=g).tolist()
-
-        val_idx = [idxs[j] for j in perm[:n_val]]
-        tr_idx = [idxs[j] for j in perm[n_val:]]
-
-        train_parts.append(Subset(full_ds, tr_idx))
-        val_parts.append(Subset(full_ds, val_idx))
-
-    return ConcatDataset(train_parts), ConcatDataset(val_parts)
-
-
-def save_label_stats(stats_ds: LaserDataset, out_path: str = "label_stats.pt") -> dict:
+def save_label_stats(ds: LaserDatasetRef, path: str):
     payload = {
-        "label_norm": stats_ds.label_norm,
-        "global": {"mean": stats_ds.global_stats.mean, "std": stats_ds.global_stats.std},
-        "per_seq": {k: {"mean": v.mean, "std": v.std} for k, v in stats_ds.seq_stats.items()},
+        "label_norm": ds.label_norm,
+        "global": {
+            "mean": ds.global_stats.mean,
+            "std": ds.global_stats.std,
+        },
+        "img_size": ds.img_size,
+        "mode": "ref_concat_6ch",
+        "train_seqs": TRAIN_SEQS,
+        "val_seqs": VAL_SEQS,
     }
-    torch.save(payload, out_path)
-    print(f"Saved {out_path}")
-    return payload
+    torch.save(payload, path)
 
 
-def unnormalize(pred_norm: torch.Tensor, seq: List[str], stats: dict) -> torch.Tensor:
-    """
-    pred_norm: [B,2] CPU tensor
-    returns: [B,2] CPU tensor in raw motor units
-    """
-    mode = stats["label_norm"]
-    if mode == "none":
+def unnormalize(pred_norm: torch.Tensor, stats: dict) -> torch.Tensor:
+    if stats["label_norm"] == "none":
         return pred_norm
-    if mode == "global":
-        mean = stats["global"]["mean"]
-        std = stats["global"]["std"]
-        return pred_norm * std + mean
-    if mode == "per_seq":
-        out = []
-        for i, s in enumerate(seq):
-            m = stats["per_seq"][s]["mean"]
-            sd = stats["per_seq"][s]["std"]
-            out.append(pred_norm[i] * sd + m)
-        return torch.stack(out, dim=0)
-    raise ValueError(f"Unknown label_norm={mode}")
+    mean = stats["global"]["mean"]
+    std = stats["global"]["std"]
+    return pred_norm * std + mean
 
 
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Device:", device)
+    print("DATA_ROOT:", DATA_ROOT)
+    print("Run dir:", RUN_DIR)
+    print("IMG_SIZE:", IMG_SIZE, "| AUGMENT:", AUGMENT)
 
-    if VAL_MODE == "holdout_seq":
-        train_ds = LaserDataset(DATA_ROOT, TRAIN_SEQS, label_norm=LABEL_NORM)
-        val_ds = LaserDataset(DATA_ROOT, VAL_SEQS, label_norm=LABEL_NORM)
-        stats_ds = LaserDataset(DATA_ROOT, TRAIN_SEQS, label_norm=LABEL_NORM)  # stats from training distribution
-        print("Train seqs:", TRAIN_SEQS, "n=", len(train_ds))
-        print("Val seqs:", VAL_SEQS, "n=", len(val_ds))
-    elif VAL_MODE == "per_seq_split":
-        full_ds = LaserDataset(DATA_ROOT, SEQS, label_norm=LABEL_NORM)
-        train_ds, val_ds = split_per_seq(full_ds, val_frac=0.2)
-        stats_ds = full_ds
-        print("Full seqs:", SEQS, "n=", len(full_ds))
-        print("Train n=", len(train_ds), "Val n=", len(val_ds))
-    else:
-        raise ValueError(f"Unknown VAL_MODE={VAL_MODE}")
+    train_ds = LaserDatasetRef(
+        DATA_ROOT, TRAIN_SEQS, img_size=IMG_SIZE, label_norm=LABEL_NORM, augment=AUGMENT
+    )
+    val_ds = LaserDatasetRef(
+        DATA_ROOT, VAL_SEQS, img_size=IMG_SIZE, label_norm=LABEL_NORM, augment=False
+    )
 
-    # Save normalization stats used for inference and for MAE reporting
-    stats = save_label_stats(stats_ds, "label_stats.pt")
+    print("Train seqs:", TRAIN_SEQS, "n=", len(train_ds))
+    print("Val seqs:", VAL_SEQS, "n=", len(val_ds))
+
+    # Save stats for inference + real-unit MAE
+    stats_path = os.path.join(RUN_DIR, "label_stats.pt")
+    save_label_stats(train_ds, stats_path)
+    stats = torch.load(stats_path)
+    print("Saved", stats_path)
 
     pin = (device == "cuda")
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS, pin_memory=pin)
-    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS, pin_memory=pin)
+    train_loader = DataLoader(
+        train_ds, batch_size=BATCH_SIZE, shuffle=True,
+        num_workers=NUM_WORKERS, pin_memory=pin
+    )
+    val_loader = DataLoader(
+        val_ds, batch_size=BATCH_SIZE, shuffle=False,
+        num_workers=NUM_WORKERS, pin_memory=pin
+    )
 
-    model = LaserNet().to(device)
+    model = LaserNet(in_ch=6).to(device)
     criterion = nn.SmoothL1Loss(beta=1.0)
     optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
 
     best_val = float("inf")
+    best_path = os.path.join(RUN_DIR, "laser_net_best.pt")
 
     for epoch in range(EPOCHS):
         t0 = time.time()
 
         # ---- train ----
         model.train()
-        train_loss = 0.0
+        train_loss_sum = 0.0
+        n_train = 0
+
         for x, y_norm, _seq, _y_raw in train_loader:
-            x = x.to(device, non_blocking=True)
-            y_norm = y_norm.to(device, non_blocking=True)
+            x = x.to(device, non_blocking=pin)
+            y_norm = y_norm.to(device, non_blocking=pin)
 
             optimizer.zero_grad(set_to_none=True)
             pred = model(x)
@@ -144,44 +130,45 @@ def main():
             loss.backward()
             optimizer.step()
 
-            train_loss += loss.item() * x.size(0)
-        train_loss /= len(train_loader.dataset)
+            train_loss_sum += loss.item() * x.size(0)
+            n_train += x.size(0)
+
+        train_loss = train_loss_sum / max(1, n_train)
 
         # ---- validate ----
         model.eval()
-        val_loss = 0.0
+        val_loss_sum = 0.0
         mae_sum = torch.zeros(2)
-        n = 0
+        n_val = 0
 
         with torch.no_grad():
-            for x, y_norm, seq, y_raw in val_loader:
-                x = x.to(device, non_blocking=True)
-                y_norm = y_norm.to(device, non_blocking=True)
+            for x, y_norm, _seq, y_raw in val_loader:
+                x = x.to(device, non_blocking=pin)
+                y_norm = y_norm.to(device, non_blocking=pin)
 
                 pred_norm = model(x)
                 loss = criterion(pred_norm, y_norm)
-                val_loss += loss.item() * x.size(0)
+                val_loss_sum += loss.item() * x.size(0)
 
-                pred_raw = unnormalize(pred_norm.cpu(), seq, stats)
+                pred_raw = unnormalize(pred_norm.cpu(), stats)
                 mae_sum += (pred_raw - y_raw).abs().sum(dim=0)
-                n += x.size(0)
+                n_val += x.size(0)
 
-        val_loss /= len(val_loader.dataset)
-        mae = (mae_sum / max(1, n)).tolist()
+        val_loss = val_loss_sum / max(1, n_val)
+        mae = (mae_sum / max(1, n_val)).tolist()
 
         dt = time.time() - t0
         print(
-            f"Epoch {epoch:03d} | "
-            f"train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | "
+            f"Epoch {epoch:03d} | train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | "
             f"MAE(az,el)=({mae[0]:.3f}, {mae[1]:.3f}) | {dt:.1f}s"
         )
 
         if val_loss < best_val:
             best_val = val_loss
-            torch.save(model.state_dict(), "laser_net_best.pt")
-            print("  saved laser_net_best.pt (best val)")
+            torch.save(model.state_dict(), best_path)
+            print("  saved", best_path)
 
-    print("Done.")
+    print("Done. Best model:", best_path)
 
 
 if __name__ == "__main__":

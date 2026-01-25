@@ -3,8 +3,8 @@ from PIL import Image
 import numpy as np
 import cv2
 
-from model import LaserNet
-from dataset2 import LaserDataset  # only for consistent preprocessing if you want
+from _model import LaserNet
+from _dataset2 import LaserDataset  # only for consistent preprocessing if you want
 
 DATA_ROOT = "/home/nvidia/Documents/kam_ml"
 SEQ_PROFILE = "seq2"   # <-- set this for the session you’re running
