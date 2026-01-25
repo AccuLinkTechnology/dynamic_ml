@@ -33,7 +33,7 @@ DATA_ROOT = pick_data_root()
 TRAIN_SEQS = ["seq1", "seq2", "seq3", "seq4"]
 VAL_SEQS = ["seq5"]
 
-IMG_SIZE = (640, 360)        # your current preference
+IMG_SIZE = (360, 180)        # your current preference
 # IMG_SIZE = DEFAULT_IMG_SIZE  # or go back to 320x180
 
 LABEL_NORM = "global"
@@ -43,7 +43,7 @@ BATCH_SIZE = 8
 EPOCHS = 80
 LR = 1e-3
 WEIGHT_DECAY = 1e-4
-NUM_WORKERS = 2
+NUM_WORKERS = 0 #FIX!!!!!!!!!!!
 
 RUN_DIR = os.path.join("runs_ref", time.strftime("%Y%m%d_%H%M%S_ref"))
 os.makedirs(RUN_DIR, exist_ok=True)
