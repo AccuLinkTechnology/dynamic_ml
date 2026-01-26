@@ -1,39 +1,46 @@
-# infer_live.py
-import cv2
 import torch
 from PIL import Image
-import torchvision.transforms as T
-from model import LaserNet
+import numpy as np
+import cv2
+import os
 
-IMG_SIZE = (320, 180)   # MUST match training
-REF_IMAGE_PATH = "train2/seq1/seq1_start 1.tga"   # adjust for live deployment
-MODEL_PATH = "laser_net_best.pt"
+from _model import LaserNet
 
+DATA_ROOT = "/home/nvidia/Documents/kam_ml/train2"
+SEQ_PROFILE = "seq2"   # which reference image to use
+IMG_SIZE = (320, 180)
 
-def build_transform():
-    return T.Compose([
-        T.Resize(IMG_SIZE),
+def preprocess_pil(pil_img, img_size=IMG_SIZE):
+    import torchvision.transforms as T
+    transform = T.Compose([
+        T.Resize(img_size),
         T.ToTensor(),
-        T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+        T.Normalize(mean=[0.5, 0.5, 0.5],
+                    std=[0.5, 0.5, 0.5])
     ])
+    return transform(pil_img.convert("RGB"))
 
 
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Device:", device)
 
-    transform = build_transform()
+    # ---- load global label stats (new pipeline) ----
+    stats = torch.load("label_stats.pt", map_location="cpu")
+    mean = stats["global"]["mean"]
+    std  = stats["global"]["std"]
 
-    # Load reference frame once
-    ref_pil = Image.open(REF_IMAGE_PATH).convert("RGB")
-    ref_tensor = transform(ref_pil).to(device)
-
-    # Model expects 3 channels for DIFF
+    # ---- load model (3-channel diff input) ----
     model = LaserNet(in_channels=3).to(device)
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+    model.load_state_dict(torch.load("laser_net_best.pt", map_location=device))
     model.eval()
 
-    cap = cv2.VideoCapture(0)
+    # ---- load reference frame once ----
+    ref_path = os.path.join(DATA_ROOT, SEQ_PROFILE, f"{SEQ_PROFILE}_start 1.tga")
+    ref_img = Image.open(ref_path).convert("RGB")
+    ref_tensor = preprocess_pil(ref_img).to(device)
+
+    cap = cv2.VideoCapture(0)  # replace with SDI pipeline if needed
 
     while True:
         ok, frame = cap.read()
@@ -41,19 +48,24 @@ def main():
             break
 
         pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        cur_tensor = transform(pil).to(device)
+        cur_tensor = preprocess_pil(pil).to(device)
 
-        diff = (cur_tensor - ref_tensor).unsqueeze(0)
+        # ---- DIFF INPUT ----
+        diff = cur_tensor - ref_tensor
+        x = diff.unsqueeze(0)
 
         with torch.no_grad():
-            y_norm = model(diff)[0].cpu()
+            y_norm = model(x)[0].cpu()
 
-        delta_az = float(y_norm[0].item())
-        delta_el = float(y_norm[1].item())
+        # Un-normalize to motor units
+        y = y_norm * std + mean
+        delta_az = float(y[0].item())
+        delta_el = float(y[1].item())
 
         print(f"Δaz={delta_az:+.3f}, Δel={delta_el:+.3f}")
 
-        # TODO send to Pi motor controller here
+        # TODO: send to Raspberry Pi
+        # send_motor_command(delta_az, delta_el)
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
