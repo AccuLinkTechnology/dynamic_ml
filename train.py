@@ -33,7 +33,7 @@ DATA_ROOT = pick_data_root()
 TRAIN_SEQS = ["seq1", "seq2", "seq3", "seq4"]
 VAL_SEQS = ["seq5"]
 
-IMG_SIZE = (360, 180)        # your current preference
+IMG_SIZE = (320, 180)        # your current preference
 # IMG_SIZE = DEFAULT_IMG_SIZE  # or go back to 320x180
 
 LABEL_NORM = "global"

@@ -1,7 +1,6 @@
 '''
 CONFIG
 pip3 install --index-url https://pypi.org/simple --extra-index-url https://pypi.ngc.nvidia.com pandas
-Looking in indexes: https://pypi.org/simple, https://pypi.ngc.nvidia.com, https://pypi.ngc.nvidia.com
 
 Docker:
 sudo docker run --rm -it --runtime nvidia --network host   -v /home/nvidia/Documents/dynamic_ml:/workspace/dynamic_ml   dustynv/l4t-pytorch:r36.4.0

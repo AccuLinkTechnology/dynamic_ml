@@ -20,23 +20,6 @@ class Stats:
 
 
 class LaserDatasetRef(Dataset):
-    """
-    Reference-image dataset:
-      input = concat(problem_RGB, reference_RGB) => 6-channel tensor [6,H,W]
-      label = [delta_azimuth, delta_elevation]
-
-    Expected folder layout (train2):
-      train2/
-        seq1.csv ... seq5.csv
-        seq1 >seq1_start 1.tga etc
-        seq2> esq2_0 1.tga etc
-    Returns:
-      x: [6,H,W] normalized to [-1,1]
-      y_norm: [2] normalized by label_norm
-      seq: string
-      y_raw: [2] raw label
-    """
-
     def __init__(
         self,
         root: str,
@@ -46,8 +29,8 @@ class LaserDatasetRef(Dataset):
         img_root: Optional[str] = None,
         label_norm: str = "global",    # "global" | "none"
         strict: bool = False,
-        augment: bool = False,         # keep OFF for now
-        mode: str = "single",  # "single" | "concat" | "diff"
+        augment: bool = False,
+        mode: str = "single",          # "single" | "concat" | "diff"
     ):
         self.root = root
         self.seqs = list(seqs)
@@ -59,29 +42,31 @@ class LaserDatasetRef(Dataset):
         self.augment = augment
         self.mode = mode
 
-        # Base transform (same for ref + problem)
-        self.base_transform = T.Compose([
+        # ---------------- FIX #1: define transform ----------------
+        base_tf = [
             T.Resize(self.img_size, interpolation=T.InterpolationMode.BILINEAR),
-            T.ToTensor(),  # [0,1]
-            T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),  # -> [-1,1]
-        ])
-
-        # Optional light augment on PROBLEM ONLY (kept off by default)
-        # (No crops/rotations/flips.)
-        self.problem_transform_aug = T.Compose([
-            T.Resize(self.img_size, interpolation=T.InterpolationMode.BILINEAR),
-            T.ColorJitter(brightness=0.2, contrast=0.2),
             T.ToTensor(),
-            T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-        ])
+        ]
 
-        # Cache reference tensors per sequence (already transformed)
+        if augment:
+            base_tf = [
+                T.Resize(self.img_size, interpolation=T.InterpolationMode.BILINEAR),
+                T.ColorJitter(brightness=0.2, contrast=0.2),
+                T.ToTensor(),
+            ]
+
+        base_tf.append(T.Normalize(mean=[0.5, 0.5, 0.5],
+                                   std=[0.5, 0.5, 0.5]))
+
+        self.transform = T.Compose(base_tf)
+        # --------------------------------------------------------
+
+        # Cache reference tensors per sequence
         self.ref_tensor_by_seq: Dict[str, torch.Tensor] = {}
 
         # Samples: (problem_img_path, y_raw, seq)
         self.samples: List[Tuple[str, torch.Tensor, str]] = []
 
-        # Collect all labels for global stats
         labels_all: List[List[float]] = []
 
         for seq in self.seqs:
@@ -93,21 +78,18 @@ class LaserDatasetRef(Dataset):
             if not os.path.isdir(seq_dir):
                 raise FileNotFoundError(f"Sequence folder not found: {seq_dir}")
 
-            # Load reference image for this seq
+            # Reference image
             ref_path = os.path.join(seq_dir, f"{seq}_start 1.tga")
             if not os.path.exists(ref_path):
                 raise FileNotFoundError(f"Reference start image not found: {ref_path}")
 
             ref_img = Image.open(ref_path).convert("RGB")
-            ref_x = self.base_transform(ref_img)  # [3,H,W]
-            self.ref_tensor_by_seq[seq] = ref_x
+            self.ref_tensor_by_seq[seq] = self.transform(ref_img)
 
             df = pd.read_csv(csv_path)
             required = {"pic_number", "delta_azimuth", "delta_elevation"}
             if not required.issubset(df.columns):
-                raise ValueError(
-                    f"{csv_path} missing columns. Found {list(df.columns)}, need {sorted(required)}"
-                )
+                raise ValueError(f"{csv_path} missing columns {required}")
 
             for _, row in df.iterrows():
                 pic = int(row["pic_number"])
@@ -128,7 +110,7 @@ class LaserDatasetRef(Dataset):
                 labels_all.append([az, el])
 
         if len(self.samples) == 0:
-            raise RuntimeError("No samples found. Check paths, CSVs, and naming patterns.")
+            raise RuntimeError("No samples found.")
 
         # Global label stats
         t_all = torch.tensor(labels_all, dtype=torch.float32)
@@ -137,39 +119,37 @@ class LaserDatasetRef(Dataset):
             std=t_all.std(dim=0).clamp_min(1e-6),
         )
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.samples)
 
-    def _norm_label(self, y: torch.Tensor) -> torch.Tensor:
+    # ---------------- FIX #2: signature mismatch ----------------
+    def _norm_label(self, y: torch.Tensor):
         if self.label_norm == "none":
             return y
-        # default: global
         return (y - self.global_stats.mean) / self.global_stats.std
+    # -----------------------------------------------------------
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, idx):
         img_path, y_raw, seq = self.samples[idx]
 
-        # load current frame
+        # current image
         img = Image.open(img_path).convert("RGB")
         x = self.transform(img)
 
-        # reference image
-        ref_path = os.path.join(self.img_root, seq, f"{seq}_start 1.tga")
-        ref_img = Image.open(ref_path).convert("RGB")
-        ref = self.transform(ref_img)
+        # reference image (cached)
+        ref = self.ref_tensor_by_seq[seq]
 
         if self.mode == "single":
             inp = x
 
         elif self.mode == "concat":
-            inp = torch.cat([x, ref], dim=0)  # 6 channels
+            inp = torch.cat([x, ref], dim=0)   # [6,H,W]
 
         elif self.mode == "diff":
-            inp = x - ref  # 3 channels difference image
+            inp = x - ref                     # [3,H,W]
 
         else:
             raise ValueError(f"Unknown mode {self.mode}")
 
-        y_norm = self._norm_label(y_raw, seq)
+        y_norm = self._norm_label(y_raw)
         return inp, y_norm, seq, y_raw
-
