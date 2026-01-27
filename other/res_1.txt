@@ -98,3 +98,112 @@ Epoch 078 | train_loss=0.0902 | val_loss=0.3653 | MAE(az,el)=(0.574, 0.344) | 7.
 Epoch 079 | train_loss=0.0834 | val_loss=0.3366 | MAE(az,el)=(0.472, 0.423) | 7.3s
 Done.
 nvidia@nvidia-
+
+res 2:
+DATA_ROOT: /workspace/dynamic_ml/train2
+Run dir: runs_ref/20260125_235217_ref
+IMG_SIZE: (320, 180) | AUGMENT: False
+[WARN] Missing image, skipping: /workspace/dynamic_ml/train2/seq2/seq2_2 1.tga
+Train seqs: ['seq1', 'seq2', 'seq3', 'seq4'] n= 366
+Val seqs: ['seq5'] n= 38
+/workspace/dynamic_ml/train.py:96: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  stats = torch.load(stats_path)
+Saved runs_ref/20260125_235217_ref/label_stats.pt
+Epoch 000 | train_loss=0.4402 | val_loss=0.4292 | MAE(az,el)=(0.593, 0.492) | 10.1s
+  saved runs_ref/20260125_235217_ref/laser_net_best.pt
+Epoch 001 | train_loss=0.3735 | val_loss=0.4432 | MAE(az,el)=(0.610, 0.509) | 9.9s
+Epoch 002 | train_loss=0.3564 | val_loss=0.4277 | MAE(az,el)=(0.596, 0.491) | 10.3s
+  saved runs_ref/20260125_235217_ref/laser_net_best.pt
+Epoch 003 | train_loss=0.3491 | val_loss=0.4479 | MAE(az,el)=(0.601, 0.522) | 9.7s
+Epoch 004 | train_loss=0.3456 | val_loss=0.4473 | MAE(az,el)=(0.609, 0.508) | 9.0s
+Epoch 005 | train_loss=0.3380 | val_loss=0.4382 | MAE(az,el)=(0.604, 0.478) | 9.7s
+Epoch 006 | train_loss=0.3256 | val_loss=0.4304 | MAE(az,el)=(0.572, 0.509) | 9.6s
+Epoch 007 | train_loss=0.3156 | val_loss=0.4133 | MAE(az,el)=(0.557, 0.457) | 8.7s
+  saved runs_ref/20260125_235217_ref/laser_net_best.pt
+Epoch 008 | train_loss=0.2937 | val_loss=0.3988 | MAE(az,el)=(0.550, 0.442) | 9.7s
+  saved runs_ref/20260125_235217_ref/laser_net_best.pt
+Epoch 009 | train_loss=0.2680 | val_loss=0.3297 | MAE(az,el)=(0.445, 0.390) | 9.4s
+  saved runs_ref/20260125_235217_ref/laser_net_best.pt
+Epoch 010 | train_loss=0.2538 | val_loss=0.3337 | MAE(az,el)=(0.440, 0.444) | 9.2s
+Epoch 011 | train_loss=0.2517 | val_loss=0.2986 | MAE(az,el)=(0.401, 0.384) | 9.7s
+  saved runs_ref/20260125_235217_ref/laser_net_best.pt
+Epoch 012 | train_loss=0.2406 | val_loss=0.3096 | MAE(az,el)=(0.415, 0.442) | 9.7s
+Epoch 013 | train_loss=0.2420 | val_loss=0.3910 | MAE(az,el)=(0.506, 0.497) | 9.5s
+Epoch 014 | train_loss=0.2315 | val_loss=0.3947 | MAE(az,el)=(0.593, 0.366) | 9.4s
+Epoch 015 | train_loss=0.2454 | val_loss=0.3852 | MAE(az,el)=(0.619, 0.373) | 9.8s
+Epoch 016 | train_loss=0.2296 | val_loss=0.3722 | MAE(az,el)=(0.479, 0.493) | 8.7s
+Epoch 017 | train_loss=0.2275 | val_loss=0.2794 | MAE(az,el)=(0.410, 0.361) | 9.1s
+  saved runs_ref/20260125_235217_ref/laser_net_best.pt
+Epoch 018 | train_loss=0.2241 | val_loss=0.3008 | MAE(az,el)=(0.445, 0.379) | 8.4s
+Epoch 019 | train_loss=0.2202 | val_loss=0.2521 | MAE(az,el)=(0.446, 0.357) | 9.2s
+  saved runs_ref/20260125_235217_ref/laser_net_best.pt
+Epoch 020 | train_loss=0.2193 | val_loss=0.3006 | MAE(az,el)=(0.468, 0.342) | 9.0s
+Epoch 021 | train_loss=0.2083 | val_loss=0.3059 | MAE(az,el)=(0.477, 0.355) | 9.2s
+Epoch 022 | train_loss=0.2050 | val_loss=0.3308 | MAE(az,el)=(0.528, 0.355) | 8.8s
+Epoch 023 | train_loss=0.2142 | val_loss=0.2966 | MAE(az,el)=(0.438, 0.341) | 9.4s
+Epoch 024 | train_loss=0.2092 | val_loss=0.3419 | MAE(az,el)=(0.577, 0.338) | 9.3s
+Epoch 025 | train_loss=0.2084 | val_loss=0.2857 | MAE(az,el)=(0.453, 0.341) | 9.1s
+Epoch 026 | train_loss=0.2035 | val_loss=0.2557 | MAE(az,el)=(0.401, 0.377) | 9.0s
+Epoch 027 | train_loss=0.2034 | val_loss=0.2530 | MAE(az,el)=(0.393, 0.347) | 9.7s
+Epoch 028 | train_loss=0.1968 | val_loss=0.2431 | MAE(az,el)=(0.392, 0.328) | 9.6s
+  saved runs_ref/20260125_235217_ref/laser_net_best.pt
+Epoch 029 | train_loss=0.2096 | val_loss=0.2578 | MAE(az,el)=(0.393, 0.332) | 8.8s
+Epoch 030 | train_loss=0.2003 | val_loss=0.2424 | MAE(az,el)=(0.398, 0.323) | 9.1s
+  saved runs_ref/20260125_235217_ref/laser_net_best.pt
+Epoch 031 | train_loss=0.1983 | val_loss=0.2647 | MAE(az,el)=(0.407, 0.364) | 9.2s
+Epoch 032 | train_loss=0.1899 | val_loss=0.2657 | MAE(az,el)=(0.421, 0.360) | 9.7s
+Epoch 033 | train_loss=0.1907 | val_loss=0.2739 | MAE(az,el)=(0.446, 0.321) | 9.4s
+Epoch 034 | train_loss=0.1904 | val_loss=0.2582 | MAE(az,el)=(0.438, 0.309) | 9.6s
+Epoch 035 | train_loss=0.1885 | val_loss=0.2412 | MAE(az,el)=(0.410, 0.320) | 9.4s
+  saved runs_ref/20260125_235217_ref/laser_net_best.pt
+Epoch 036 | train_loss=0.1892 | val_loss=0.2502 | MAE(az,el)=(0.409, 0.312) | 9.6s
+Epoch 037 | train_loss=0.1888 | val_loss=0.3023 | MAE(az,el)=(0.515, 0.313) | 8.7s
+Epoch 038 | train_loss=0.1868 | val_loss=0.2608 | MAE(az,el)=(0.434, 0.307) | 9.5s
+Epoch 039 | train_loss=0.1831 | val_loss=0.2455 | MAE(az,el)=(0.417, 0.304) | 9.6s
+Epoch 040 | train_loss=0.1941 | val_loss=0.2582 | MAE(az,el)=(0.396, 0.393) | 9.1s
+Epoch 041 | train_loss=0.1807 | val_loss=0.2692 | MAE(az,el)=(0.450, 0.329) | 9.3s
+Epoch 042 | train_loss=0.1829 | val_loss=0.2821 | MAE(az,el)=(0.479, 0.301) | 9.8s
+Epoch 043 | train_loss=0.1945 | val_loss=0.2592 | MAE(az,el)=(0.424, 0.332) | 9.4s
+Epoch 044 | train_loss=0.1817 | val_loss=0.2888 | MAE(az,el)=(0.486, 0.330) | 9.1s
+Epoch 045 | train_loss=0.1794 | val_loss=0.2403 | MAE(az,el)=(0.397, 0.307) | 9.0s
+  saved runs_ref/20260125_235217_ref/laser_net_best.pt
+Epoch 046 | train_loss=0.1802 | val_loss=0.2396 | MAE(az,el)=(0.402, 0.303) | 9.1s
+  saved runs_ref/20260125_235217_ref/laser_net_best.pt
+Epoch 047 | train_loss=0.1785 | val_loss=0.2267 | MAE(az,el)=(0.409, 0.331) | 9.0s
+  saved runs_ref/20260125_235217_ref/laser_net_best.pt
+Epoch 048 | train_loss=0.1774 | val_loss=0.2340 | MAE(az,el)=(0.399, 0.307) | 9.4s
+Epoch 049 | train_loss=0.1768 | val_loss=0.2567 | MAE(az,el)=(0.413, 0.346) | 8.3s
+Epoch 050 | train_loss=0.1817 | val_loss=0.2630 | MAE(az,el)=(0.445, 0.299) | 9.8s
+Epoch 051 | train_loss=0.1809 | val_loss=0.2732 | MAE(az,el)=(0.464, 0.308) | 9.1s
+Epoch 052 | train_loss=0.1747 | val_loss=0.2819 | MAE(az,el)=(0.490, 0.315) | 9.2s
+Epoch 053 | train_loss=0.1788 | val_loss=0.2473 | MAE(az,el)=(0.415, 0.305) | 9.3s
+Epoch 054 | train_loss=0.1720 | val_loss=0.2458 | MAE(az,el)=(0.416, 0.309) | 9.9s
+Epoch 055 | train_loss=0.1772 | val_loss=0.2666 | MAE(az,el)=(0.452, 0.297) | 9.5s
+Epoch 056 | train_loss=0.1797 | val_loss=0.2231 | MAE(az,el)=(0.403, 0.303) | 9.4s
+  saved runs_ref/20260125_235217_ref/laser_net_best.pt
+Epoch 057 | train_loss=0.1723 | val_loss=0.2285 | MAE(az,el)=(0.413, 0.322) | 9.0s
+Epoch 058 | train_loss=0.1694 | val_loss=0.2507 | MAE(az,el)=(0.425, 0.295) | 9.5s
+Epoch 059 | train_loss=0.1687 | val_loss=0.2276 | MAE(az,el)=(0.393, 0.299) | 9.5s
+Epoch 060 | train_loss=0.1687 | val_loss=0.2221 | MAE(az,el)=(0.427, 0.310) | 8.6s
+  saved runs_ref/20260125_235217_ref/laser_net_best.pt
+Epoch 061 | train_loss=0.1783 | val_loss=0.2387 | MAE(az,el)=(0.390, 0.346) | 8.7s
+Epoch 062 | train_loss=0.1706 | val_loss=0.2590 | MAE(az,el)=(0.402, 0.360) | 8.7s
+Epoch 063 | train_loss=0.1768 | val_loss=0.2670 | MAE(az,el)=(0.427, 0.314) | 8.9s
+Epoch 064 | train_loss=0.1764 | val_loss=0.2674 | MAE(az,el)=(0.454, 0.315) | 9.5s
+Epoch 065 | train_loss=0.1774 | val_loss=0.2272 | MAE(az,el)=(0.442, 0.314) | 9.0s
+Epoch 066 | train_loss=0.1708 | val_loss=0.2495 | MAE(az,el)=(0.423, 0.299) | 9.7s
+Epoch 067 | train_loss=0.1659 | val_loss=0.2398 | MAE(az,el)=(0.392, 0.306) | 8.4s
+Epoch 068 | train_loss=0.1732 | val_loss=0.2462 | MAE(az,el)=(0.407, 0.293) | 8.5s
+Epoch 069 | train_loss=0.1681 | val_loss=0.2240 | MAE(az,el)=(0.393, 0.302) | 9.8s
+Epoch 070 | train_loss=0.1655 | val_loss=0.2546 | MAE(az,el)=(0.426, 0.297) | 9.5s
+Epoch 071 | train_loss=0.1820 | val_loss=0.2342 | MAE(az,el)=(0.391, 0.313) | 8.6s
+Epoch 072 | train_loss=0.1612 | val_loss=0.2470 | MAE(az,el)=(0.424, 0.298) | 9.7s
+Epoch 073 | train_loss=0.1610 | val_loss=0.2833 | MAE(az,el)=(0.453, 0.322) | 9.2s
+Epoch 074 | train_loss=0.1650 | val_loss=0.2242 | MAE(az,el)=(0.389, 0.296) | 8.8s
+Epoch 075 | train_loss=0.1686 | val_loss=0.2227 | MAE(az,el)=(0.400, 0.294) | 9.8s
+Epoch 076 | train_loss=0.1693 | val_loss=0.2363 | MAE(az,el)=(0.392, 0.297) | 9.0s
+Epoch 077 | train_loss=0.1663 | val_loss=0.2573 | MAE(az,el)=(0.411, 0.343) | 9.6s
+Epoch 078 | train_loss=0.1637 | val_loss=0.2291 | MAE(az,el)=(0.387, 0.304) | 9.7s
+Epoch 079 | train_loss=0.1625 | val_loss=0.2321 | MAE(az,el)=(0.397, 0.303) | 9.4s
+Done. Best model: runs_ref/20260125_235217_ref/laser_net_best.pt
+root@nvidia-desktop:/workspace/dynamic_ml# 
