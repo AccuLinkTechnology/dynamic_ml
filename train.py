@@ -5,9 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
-from dataset2 import LaserDatasetRef, DEFAULT_IMG_SIZE
-
-
+from dataset2 import LaserDatasetRef
 from model import LaserNet
 
 
@@ -30,73 +28,59 @@ def pick_data_root() -> str:
 # -------------------------
 DATA_ROOT = pick_data_root()
 
-# Move seq3 into validation (as you requested)
+# Multi-seq validation, and exclude seq3 from training
 VAL_SEQS = ["seq5", "seq3"]
 TRAIN_SEQS = ["seq1", "seq2", "seq4", "seq6", "seq7", "seq8", "seq9", "seq10", "seq11", "seq12", "seq13"]
 
 # IMPORTANT: IMG_SIZE IS (H, W)
-IMG_SIZE = (180, 320)        # (H, W)
-# IMG_SIZE = DEFAULT_IMG_SIZE
+IMG_SIZE = (180, 320)
 
+MODE = "diff"  # keep diff to avoid “sequence identity” cues as much as possible
+
+# Label settings
 LABEL_NORM = "global"
-LABEL_CENTER = "seq"         # <-- C2 enabled: "seq" centering
-AUGMENT = False              # keep OFF for now
+BASELINE_STRATEGY = "first_k"   # "first_k" recommended for your runtime semantics
+BASELINE_K = 5                  # first 5 frames approximate “baseline still”
+
+AUGMENT = False
 
 BATCH_SIZE = 8
 EPOCHS = 80
 LR = 1e-3
 WEIGHT_DECAY = 1e-4
 NUM_WORKERS = 4
-MODE = "diff"                # "single" | "concat" | "diff"
 
 RUN_DIR = os.path.join("runs_ref", time.strftime("%Y%m%d_%H%M%S_ref"))
 os.makedirs(RUN_DIR, exist_ok=True)
 
 
 def save_label_stats(train_ds: LaserDatasetRef, path: str):
-    # Save seq means too (for inference / analysis)
-    seq_means_payload = {k: v.detach().cpu() for k, v in getattr(train_ds, "seq_means", {}).items()}
-
+    # Save stats + per-seq baselines used to construct command labels (for audit/debug)
+    baselines = {k: v.detach().cpu() for k, v in train_ds.baseline_by_seq.items()}
     payload = {
         "label_norm": train_ds.label_norm,
-        "label_center": train_ds.label_center,
-        "global": {
-            "mean": train_ds.global_stats.mean.detach().cpu(),
-            "std": train_ds.global_stats.std.detach().cpu(),
-        },
-        "seq_means": seq_means_payload,   # { "seq1": tensor([..,..]), ... }
         "img_size": train_ds.img_size,
         "mode": MODE,
         "train_seqs": TRAIN_SEQS,
         "val_seqs": VAL_SEQS,
+        "baseline_strategy": BASELINE_STRATEGY,
+        "baseline_k": BASELINE_K,
+        "global": {
+            "mean": train_ds.global_stats.mean.detach().cpu(),
+            "std": train_ds.global_stats.std.detach().cpu(),
+        },
+        "baseline_by_seq": baselines,
     }
     torch.save(payload, path)
 
 
 def unnormalize(pred_norm: torch.Tensor, stats: dict) -> torch.Tensor:
-    """Undo global normalization (returns CENTERED labels if label_center='seq')."""
+    """Undo global normalization, returning predictions in COMMAND space."""
     if stats.get("label_norm", "none") == "none":
         return pred_norm
     mean = stats["global"]["mean"]
     std = stats["global"]["std"]
     return pred_norm * std + mean
-
-
-def uncenter(centered: torch.Tensor, seqs, stats: dict) -> torch.Tensor:
-    """Undo seq-centering (returns RAW labels)."""
-    if stats.get("label_center", "none") != "seq":
-        return centered
-
-    seq_means = stats.get("seq_means", {})
-    # seqs is a list/tuple of strings with batch size length
-    means = []
-    for s in seqs:
-        m = seq_means.get(s, None)
-        if m is None:
-            m = torch.zeros(2)
-        means.append(m)
-    mean_t = torch.stack(means, dim=0)  # [B,2]
-    return centered + mean_t
 
 
 def main():
@@ -105,50 +89,50 @@ def main():
     print("DATA_ROOT:", DATA_ROOT)
     print("Run dir:", RUN_DIR)
     print("IMG_SIZE:", IMG_SIZE, "| AUGMENT:", AUGMENT)
-    print("LABEL_CENTER:", LABEL_CENTER, "| LABEL_NORM:", LABEL_NORM)
+    print("MODE:", MODE)
+    print("LABEL_NORM:", LABEL_NORM)
+    print("BASELINE_STRATEGY:", BASELINE_STRATEGY, "| BASELINE_K:", BASELINE_K)
     print("TRAIN_SEQS:", TRAIN_SEQS)
     print("VAL_SEQS:", VAL_SEQS)
 
-    # Build train first (its stats + seq_means are the source of truth)
+    # Train dataset computes baseline + stats in COMMAND space
     train_ds = LaserDatasetRef(
         DATA_ROOT, TRAIN_SEQS,
         img_size=IMG_SIZE,
         label_norm=LABEL_NORM,
-        label_center=LABEL_CENTER,
         augment=AUGMENT,
         mode=MODE,
+        baseline_strategy=BASELINE_STRATEGY,
+        baseline_k=BASELINE_K,
     )
 
-    # Build val using TRAIN stats + TRAIN seq means
+    # Val uses its own baseline to define command labels, but MUST use TRAIN stats for normalization
     val_ds = LaserDatasetRef(
         DATA_ROOT, VAL_SEQS,
         img_size=IMG_SIZE,
         label_norm=LABEL_NORM,
-        label_center=LABEL_CENTER,
         augment=False,
         mode=MODE,
+        baseline_strategy=BASELINE_STRATEGY,
+        baseline_k=BASELINE_K,
         stats_override=train_ds.global_stats,
-        seq_center_override=getattr(train_ds, "seq_means", None),
     )
 
     print("Train n =", len(train_ds))
     print("Val   n =", len(val_ds))
 
-    # Save stats for inference + raw-unit metrics
     stats_path = os.path.join(RUN_DIR, "label_stats.pt")
     save_label_stats(train_ds, stats_path)
 
-    # Safer torch.load usage (silences warning on newer torch)
+    # Safe-ish load (handles older torch too)
     try:
         stats = torch.load(stats_path, weights_only=True, map_location="cpu")
     except TypeError:
         stats = torch.load(stats_path, map_location="cpu")
 
     print("Saved", stats_path)
-    print("Train centered-mean:", stats["global"]["mean"].tolist())
-    print("Train centered-std :", stats["global"]["std"].tolist())
-    if stats.get("label_center") == "seq":
-        print("Seq means saved for:", sorted(list(stats["seq_means"].keys())))
+    print("Train CMD mean:", stats["global"]["mean"].tolist())
+    print("Train CMD std :", stats["global"]["std"].tolist())
 
     pin = (device == "cuda")
     train_loader = DataLoader(
@@ -174,6 +158,11 @@ def main():
     criterion = nn.SmoothL1Loss(beta=1.0)
     optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
 
+    # Optional but usually beneficial for the jitter you’ve seen:
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", factor=0.5, patience=8, min_lr=1e-6
+    )
+
     best_val = float("inf")
     best_path = os.path.join(RUN_DIR, "laser_net_best.pt")
 
@@ -185,7 +174,7 @@ def main():
         train_loss_sum = 0.0
         n_train = 0
 
-        for x, y_norm, _seq, _y_raw in train_loader:
+        for x, y_norm, _seq, _y_cmd_raw, _y_raw in train_loader:
             x = x.to(device, non_blocking=pin)
             y_norm = y_norm.to(device, non_blocking=pin)
 
@@ -200,15 +189,15 @@ def main():
 
         train_loss = train_loss_sum / max(1, n_train)
 
-        # ---- validate ----
+        # ---- validate (COMMAND SPACE) ----
         model.eval()
         val_loss_sum = 0.0
         mae_sum = torch.zeros(2)
-        err_sum = torch.zeros(2)  # <-- C1: bias logging
+        err_sum = torch.zeros(2)
         n_val = 0
 
         with torch.no_grad():
-            for x, y_norm, seqs, y_raw in val_loader:
+            for x, y_norm, seqs, y_cmd_raw, _y_raw in val_loader:
                 x = x.to(device, non_blocking=pin)
                 y_norm = y_norm.to(device, non_blocking=pin)
 
@@ -216,24 +205,25 @@ def main():
                 loss = criterion(pred_norm, y_norm)
                 val_loss_sum += loss.item() * x.size(0)
 
-                # pred_norm -> centered -> raw
-                pred_centered = unnormalize(pred_norm.cpu(), stats)            # [B,2] centered
-                pred_raw = uncenter(pred_centered, seqs, stats)               # [B,2] raw
+                pred_cmd = unnormalize(pred_norm.cpu(), stats)  # [B,2] in COMMAND space
+                diff = (pred_cmd - y_cmd_raw)
 
-                diff = (pred_raw - y_raw)
                 mae_sum += diff.abs().sum(dim=0)
-                err_sum += diff.sum(dim=0)  # signed error for bias
+                err_sum += diff.sum(dim=0)
                 n_val += x.size(0)
 
         val_loss = val_loss_sum / max(1, n_val)
         mae = (mae_sum / max(1, n_val)).tolist()
         bias = (err_sum / max(1, n_val)).tolist()
 
+        scheduler.step(val_loss)
+
         dt = time.time() - t0
+        lr_now = optimizer.param_groups[0]["lr"]
         print(
-            f"Epoch {epoch:03d} | train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | "
-            f"MAE(az,el)=({mae[0]:.3f}, {mae[1]:.3f}) | "
-            f"BIAS(az,el)=({bias[0]:.3f}, {bias[1]:.3f}) | {dt:.1f}s"
+            f"Epoch {epoch:03d} | lr={lr_now:.2e} | train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | "
+            f"MAE_CMD(az,el)=({mae[0]:.3f}, {mae[1]:.3f}) | "
+            f"BIAS_CMD(az,el)=({bias[0]:.3f}, {bias[1]:.3f}) | {dt:.1f}s"
         )
 
         if val_loss < best_val:

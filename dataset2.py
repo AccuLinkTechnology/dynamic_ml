@@ -20,12 +20,14 @@ class Stats:
 
 class LaserDatasetRef(Dataset):
     """
-    Returns: inp, y_norm, seq, y_raw
+    Returns: inp, y_norm, seq, y_cmd_raw, y_raw
       - inp: image input (single/concat/diff)
-      - y_norm: normalized target (possibly seq-centered before normalization)
-      - seq: sequence string (e.g., "seq5")
-      - y_raw: original raw label (no centering, no normalization)
+      - y_norm: normalized target in *command space* (centered to baseline)
+      - seq: sequence id string
+      - y_cmd_raw: unnormalized command target (y_raw - baseline_y0)
+      - y_raw: original raw label from CSV (absolute-ish, includes baseline drift)
     """
+
     def __init__(
         self,
         root: str,
@@ -33,13 +35,14 @@ class LaserDatasetRef(Dataset):
         img_size: Tuple[int, int] = DEFAULT_IMG_SIZE,  # (H, W)
         csv_root: Optional[str] = None,
         img_root: Optional[str] = None,
-        label_norm: str = "global",        # "global" | "none"
-        label_center: str = "none",        # "none" | "seq"
+        label_norm: str = "global",     # "global" | "none"
         strict: bool = False,
         augment: bool = False,
-        mode: str = "single",              # "single" | "concat" | "diff"
-        stats_override: Optional[Stats] = None,  # use train stats for val/test
-        seq_center_override: Optional[Dict[str, torch.Tensor]] = None,  # use train seq means for val/test
+        mode: str = "single",           # "single" | "concat" | "diff"
+        stats_override: Optional[Stats] = None,  # train stats for val/test
+        # NEW: baseline definition for "command" labels
+        baseline_strategy: str = "first_k",      # "first_k" | "seq_mean"
+        baseline_k: int = 5,                     # only used if first_k
     ):
         self.root = root
         self.seqs = list(seqs)
@@ -47,24 +50,25 @@ class LaserDatasetRef(Dataset):
         self.img_root = img_root or root
         self.img_size = img_size
         self.label_norm = label_norm
-        self.label_center = label_center
         self.strict = strict
         self.augment = augment
         self.mode = mode
         self.stats_override = stats_override
-        self.seq_center_override = seq_center_override
+        self.baseline_strategy = baseline_strategy
+        self.baseline_k = int(baseline_k)
 
-        if self.label_center not in ("none", "seq"):
-            raise ValueError(f"label_center must be 'none' or 'seq', got {self.label_center}")
+        if self.baseline_strategy not in ("first_k", "seq_mean"):
+            raise ValueError(f"baseline_strategy must be 'first_k' or 'seq_mean', got {self.baseline_strategy}")
+        if self.baseline_k <= 0:
+            raise ValueError("baseline_k must be >= 1")
 
         # ---------------- Transform ----------------
         tf_list = [
             T.Resize(self.img_size, interpolation=T.InterpolationMode.BILINEAR),
         ]
         if augment:
-            tf_list += [
-                T.ColorJitter(brightness=0.2, contrast=0.2),
-            ]
+            # NOTE: if you later enable augment for diff/concat, we should do paired augmentation.
+            tf_list += [T.ColorJitter(brightness=0.2, contrast=0.2)]
         tf_list += [
             T.ToTensor(),
             T.Normalize(mean=[0.5, 0.5, 0.5],
@@ -76,11 +80,11 @@ class LaserDatasetRef(Dataset):
         # Cache reference tensors per sequence
         self.ref_tensor_by_seq: Dict[str, torch.Tensor] = {}
 
-        # Samples: (problem_img_path, y_raw, seq)
-        self.samples: List[Tuple[str, torch.Tensor, str]] = []
+        # Samples: (problem_img_path, pic_number, y_raw, seq)
+        self.samples: List[Tuple[str, int, torch.Tensor, str]] = []
 
-        # Collect raw labels per seq for seq-centering
-        labels_by_seq: Dict[str, List[torch.Tensor]] = {}
+        # Collect labels per seq (and pic numbers) to compute baseline
+        labels_by_seq: Dict[str, List[Tuple[int, torch.Tensor]]] = {}
 
         for seq in self.seqs:
             labels_by_seq[seq] = []
@@ -121,42 +125,40 @@ class LaserDatasetRef(Dataset):
                 el = float(row["delta_elevation"])
                 y_raw = torch.tensor([az, el], dtype=torch.float32)
 
-                self.samples.append((problem_path, y_raw, seq))
-                labels_by_seq[seq].append(y_raw)
+                self.samples.append((problem_path, pic, y_raw, seq))
+                labels_by_seq[seq].append((pic, y_raw))
 
         if len(self.samples) == 0:
             raise RuntimeError("No samples found.")
 
-        # ---------------- Sequence means (for centering) ----------------
-        if self.label_center == "seq":
-            if self.seq_center_override is not None:
-                # Use train-provided seq means (val/test path)
-                self.seq_means = self.seq_center_override
+        # ---------------- Baseline per sequence ----------------
+        # This defines "command space": y_cmd = y_raw - baseline(seq)
+        self.baseline_by_seq: Dict[str, torch.Tensor] = {}
+
+        for seq in self.seqs:
+            items = labels_by_seq.get(seq, [])
+            if len(items) == 0:
+                self.baseline_by_seq[seq] = torch.zeros(2, dtype=torch.float32)
+                continue
+
+            if self.baseline_strategy == "seq_mean":
+                ys = torch.stack([y for _pic, y in items], dim=0)
+                self.baseline_by_seq[seq] = ys.mean(dim=0)
             else:
-                # Compute from this dataset (train path)
-                self.seq_means: Dict[str, torch.Tensor] = {}
-                for seq in self.seqs:
-                    ys = labels_by_seq.get(seq, [])
-                    if len(ys) == 0:
-                        # no samples -> default zero mean
-                        self.seq_means[seq] = torch.zeros(2, dtype=torch.float32)
-                    else:
-                        self.seq_means[seq] = torch.stack(ys, dim=0).mean(dim=0)
-        else:
-            self.seq_means = {}
-        # ---------------------------------------------------------------
+                # first_k smallest pic numbers
+                items_sorted = sorted(items, key=lambda t: t[0])
+                k = min(self.baseline_k, len(items_sorted))
+                ys0 = torch.stack([items_sorted[i][1] for i in range(k)], dim=0)
+                self.baseline_by_seq[seq] = ys0.mean(dim=0)
 
-        # ---------------- Global stats (for normalization) --------------
-        # IMPORTANT: if seq-centering is enabled, compute global stats on CENTERED labels
-        centered_labels_all: List[torch.Tensor] = []
-        if self.label_center == "seq":
-            for _img_path, y_raw, seq in self.samples:
-                centered_labels_all.append(y_raw - self.seq_means.get(seq, torch.zeros(2)))
-        else:
-            for _img_path, y_raw, _seq in self.samples:
-                centered_labels_all.append(y_raw)
+        # ---------------- Global stats (for normalization) ----------------
+        # Compute stats on COMMAND labels, not raw
+        cmd_all = []
+        for _img_path, _pic, y_raw, seq in self.samples:
+            y0 = self.baseline_by_seq.get(seq, torch.zeros(2, dtype=torch.float32))
+            cmd_all.append(y_raw - y0)
+        t_all = torch.stack(cmd_all, dim=0)
 
-        t_all = torch.stack(centered_labels_all, dim=0)
         self.global_stats = Stats(
             mean=t_all.mean(dim=0),
             std=t_all.std(dim=0).clamp_min(1e-6),
@@ -166,19 +168,14 @@ class LaserDatasetRef(Dataset):
     def __len__(self):
         return len(self.samples)
 
-    def _center_label(self, y_raw: torch.Tensor, seq: str) -> torch.Tensor:
-        if self.label_center == "seq":
-            return y_raw - self.seq_means.get(seq, torch.zeros(2, dtype=torch.float32))
-        return y_raw
-
-    def _norm_label(self, y_centered: torch.Tensor) -> torch.Tensor:
+    def _norm_label(self, y_cmd: torch.Tensor) -> torch.Tensor:
         if self.label_norm == "none":
-            return y_centered
+            return y_cmd
         stats = self.stats_override if self.stats_override is not None else self.global_stats
-        return (y_centered - stats.mean) / stats.std
+        return (y_cmd - stats.mean) / stats.std
 
     def __getitem__(self, idx):
-        img_path, y_raw, seq = self.samples[idx]
+        img_path, _pic, y_raw, seq = self.samples[idx]
 
         # current image
         img = Image.open(img_path).convert("RGB")
@@ -196,7 +193,9 @@ class LaserDatasetRef(Dataset):
         else:
             raise ValueError(f"Unknown mode {self.mode}")
 
-        y_centered = self._center_label(y_raw, seq)
-        y_norm = self._norm_label(y_centered)
+        # Command label: baseline-free incremental correction
+        y0 = self.baseline_by_seq.get(seq, torch.zeros(2, dtype=torch.float32))
+        y_cmd = y_raw - y0
 
-        return inp, y_norm, seq, y_raw
+        y_norm = self._norm_label(y_cmd)
+        return inp, y_norm, seq, y_cmd, y_raw
