@@ -28,19 +28,22 @@ def pick_data_root() -> str:
 # -------------------------
 DATA_ROOT = pick_data_root()
 
-# Multi-seq validation, and exclude seq3 from training
 VAL_SEQS = ["seq5", "seq3"]
 TRAIN_SEQS = ["seq1", "seq2", "seq4", "seq6", "seq7", "seq8", "seq9", "seq10", "seq11", "seq12", "seq13"]
 
-# IMPORTANT: IMG_SIZE IS (H, W)
-IMG_SIZE = (180, 320)
+IMG_SIZE = (180, 320)  # (H, W)
 
-MODE = "diff"  # keep diff to avoid “sequence identity” cues as much as possible
+MODE = "diff"          # keep diff first; we can A/B test concat later
 
-# Label settings
 LABEL_NORM = "global"
-BASELINE_STRATEGY = "first_k"   # "first_k" recommended for your runtime semantics
-BASELINE_K = 5                  # first 5 frames approximate “baseline still”
+
+# (1) Baseline = stable frames closest to ref
+BASELINE_STRATEGY = "stable_m"
+BASELINE_M = 10        # try 10; we can tune 5/15
+BASELINE_K = 5         # unused for stable_m, but kept for completeness
+
+# (2) Zero-at-reference auxiliary loss
+ZERO_LOSS_W = 0.20     # 0.1–0.3 reasonable; start 0.2
 
 AUGMENT = False
 
@@ -50,12 +53,14 @@ LR = 1e-3
 WEIGHT_DECAY = 1e-4
 NUM_WORKERS = 4
 
+# Bias-aware checkpointing (robot-safe)
+BIAS_LAMBDA = 0.25     # score = val_loss + lambda*(|bias_az|+|bias_el|)
+
 RUN_DIR = os.path.join("runs_ref", time.strftime("%Y%m%d_%H%M%S_ref"))
 os.makedirs(RUN_DIR, exist_ok=True)
 
 
 def save_label_stats(train_ds: LaserDatasetRef, path: str):
-    # Save stats + per-seq baselines used to construct command labels (for audit/debug)
     baselines = {k: v.detach().cpu() for k, v in train_ds.baseline_by_seq.items()}
     payload = {
         "label_norm": train_ds.label_norm,
@@ -64,6 +69,7 @@ def save_label_stats(train_ds: LaserDatasetRef, path: str):
         "train_seqs": TRAIN_SEQS,
         "val_seqs": VAL_SEQS,
         "baseline_strategy": BASELINE_STRATEGY,
+        "baseline_m": BASELINE_M,
         "baseline_k": BASELINE_K,
         "global": {
             "mean": train_ds.global_stats.mean.detach().cpu(),
@@ -83,6 +89,32 @@ def unnormalize(pred_norm: torch.Tensor, stats: dict) -> torch.Tensor:
     return pred_norm * std + mean
 
 
+def make_zero_inputs(mode: str, seqs, train_ds: LaserDatasetRef) -> torch.Tensor:
+    """
+    Build a 'no-change' input batch to enforce output ~0 when stable.
+    - diff: all zeros
+    - concat: [ref, ref]
+    - single: ref
+    Returned tensor is CPU; caller moves to device.
+    """
+    if mode == "diff":
+        # shape based on ref
+        any_seq = seqs[0]
+        ref = train_ds.ref_tensor_by_seq[any_seq]
+        b = len(seqs)
+        return torch.zeros((b, 3, ref.shape[1], ref.shape[2]), dtype=ref.dtype)
+
+    refs = [train_ds.ref_tensor_by_seq[s] for s in seqs]
+    ref_batch = torch.stack(refs, dim=0)  # [B,3,H,W]
+
+    if mode == "single":
+        return ref_batch
+    if mode == "concat":
+        return torch.cat([ref_batch, ref_batch], dim=1)  # [B,6,H,W]
+
+    raise ValueError(f"Unknown mode for zero inputs: {mode}")
+
+
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Device:", device)
@@ -91,11 +123,11 @@ def main():
     print("IMG_SIZE:", IMG_SIZE, "| AUGMENT:", AUGMENT)
     print("MODE:", MODE)
     print("LABEL_NORM:", LABEL_NORM)
-    print("BASELINE_STRATEGY:", BASELINE_STRATEGY, "| BASELINE_K:", BASELINE_K)
+    print("BASELINE_STRATEGY:", BASELINE_STRATEGY, "| BASELINE_M:", BASELINE_M)
+    print("ZERO_LOSS_W:", ZERO_LOSS_W)
     print("TRAIN_SEQS:", TRAIN_SEQS)
     print("VAL_SEQS:", VAL_SEQS)
 
-    # Train dataset computes baseline + stats in COMMAND space
     train_ds = LaserDatasetRef(
         DATA_ROOT, TRAIN_SEQS,
         img_size=IMG_SIZE,
@@ -103,10 +135,12 @@ def main():
         augment=AUGMENT,
         mode=MODE,
         baseline_strategy=BASELINE_STRATEGY,
+        baseline_m=BASELINE_M,
         baseline_k=BASELINE_K,
     )
 
-    # Val uses its own baseline to define command labels, but MUST use TRAIN stats for normalization
+    # Val: baseline computed from val frames (ok for offline evaluation),
+    # but normalization MUST use train stats
     val_ds = LaserDatasetRef(
         DATA_ROOT, VAL_SEQS,
         img_size=IMG_SIZE,
@@ -114,6 +148,7 @@ def main():
         augment=False,
         mode=MODE,
         baseline_strategy=BASELINE_STRATEGY,
+        baseline_m=BASELINE_M,
         baseline_k=BASELINE_K,
         stats_override=train_ds.global_stats,
     )
@@ -124,7 +159,6 @@ def main():
     stats_path = os.path.join(RUN_DIR, "label_stats.pt")
     save_label_stats(train_ds, stats_path)
 
-    # Safe-ish load (handles older torch too)
     try:
         stats = torch.load(stats_path, weights_only=True, map_location="cpu")
     except TypeError:
@@ -158,12 +192,11 @@ def main():
     criterion = nn.SmoothL1Loss(beta=1.0)
     optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
 
-    # Optional but usually beneficial for the jitter you’ve seen:
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=8, min_lr=1e-6
     )
 
-    best_val = float("inf")
+    best_score = float("inf")
     best_path = os.path.join(RUN_DIR, "laser_net_best.pt")
 
     for epoch in range(EPOCHS):
@@ -174,22 +207,32 @@ def main():
         train_loss_sum = 0.0
         n_train = 0
 
-        for x, y_norm, _seq, _y_cmd_raw, _y_raw in train_loader:
+        for x, y_norm, seqs, _y_cmd_raw, _y_raw in train_loader:
             x = x.to(device, non_blocking=pin)
             y_norm = y_norm.to(device, non_blocking=pin)
 
             optimizer.zero_grad(set_to_none=True)
+
             pred = model(x)
-            loss = criterion(pred, y_norm)
+            loss_main = criterion(pred, y_norm)
+
+            # (2) zero-at-reference auxiliary loss
+            seqs_list = list(seqs)
+            x0 = make_zero_inputs(MODE, seqs_list, train_ds).to(device, non_blocking=pin)
+            y0 = torch.zeros((x0.size(0), 2), device=device, dtype=pred.dtype)
+            pred0 = model(x0)
+            loss_zero = criterion(pred0, y0)
+
+            loss = loss_main + ZERO_LOSS_W * loss_zero
             loss.backward()
             optimizer.step()
 
-            train_loss_sum += loss.item() * x.size(0)
+            train_loss_sum += loss_main.item() * x.size(0)
             n_train += x.size(0)
 
         train_loss = train_loss_sum / max(1, n_train)
 
-        # ---- validate (COMMAND SPACE) ----
+        # ---- validate (COMMAND space) ----
         model.eval()
         val_loss_sum = 0.0
         mae_sum = torch.zeros(2)
@@ -197,7 +240,7 @@ def main():
         n_val = 0
 
         with torch.no_grad():
-            for x, y_norm, seqs, y_cmd_raw, _y_raw in val_loader:
+            for x, y_norm, _seqs, y_cmd_raw, _y_raw in val_loader:
                 x = x.to(device, non_blocking=pin)
                 y_norm = y_norm.to(device, non_blocking=pin)
 
@@ -205,7 +248,7 @@ def main():
                 loss = criterion(pred_norm, y_norm)
                 val_loss_sum += loss.item() * x.size(0)
 
-                pred_cmd = unnormalize(pred_norm.cpu(), stats)  # [B,2] in COMMAND space
+                pred_cmd = unnormalize(pred_norm.cpu(), stats)
                 diff = (pred_cmd - y_cmd_raw)
 
                 mae_sum += diff.abs().sum(dim=0)
@@ -217,17 +260,21 @@ def main():
         bias = (err_sum / max(1, n_val)).tolist()
 
         scheduler.step(val_loss)
+        lr_now = optimizer.param_groups[0]["lr"]
+
+        # Bias-aware score for robot safety
+        score = val_loss + BIAS_LAMBDA * (abs(bias[0]) + abs(bias[1]))
 
         dt = time.time() - t0
-        lr_now = optimizer.param_groups[0]["lr"]
         print(
             f"Epoch {epoch:03d} | lr={lr_now:.2e} | train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | "
             f"MAE_CMD(az,el)=({mae[0]:.3f}, {mae[1]:.3f}) | "
-            f"BIAS_CMD(az,el)=({bias[0]:.3f}, {bias[1]:.3f}) | {dt:.1f}s"
+            f"BIAS_CMD(az,el)=({bias[0]:.3f}, {bias[1]:.3f}) | "
+            f"score={score:.4f} | {dt:.1f}s"
         )
 
-        if val_loss < best_val:
-            best_val = val_loss
+        if score < best_score:
+            best_score = score
             torch.save(model.state_dict(), best_path)
             print("  saved", best_path)
 
