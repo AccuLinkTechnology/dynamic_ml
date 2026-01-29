@@ -5,22 +5,25 @@ import torch
 import torchvision.transforms as T
 from PIL import Image
 
-from model import LaserNet  
+from model import LaserNet
 
 
 # ---- CONFIG ----
 DEVICE_PATH = "/dev/video0"
 DATA_ROOT = "/home/nvidia/Documents/dynamic_ml/train2"   # for loading the seq start ref
-SEQ_PROFILE = "seq5"                                # pick what matches today
+SEQ_PROFILE = "seq5"                                    # pick what matches today
 W, H, FPS = 1920, 1080, 25
 
-IMG_SIZE = (320, 180)                               # training size
-REF_SAVE_DIR = "refs_live"                          # saved separately (no overwrite)
+# Training uses torchvision Resize((H,W)) == (180,320)
+IMG_SIZE_HW = (180, 320)                                # (H, W) MUST match training
+
+REF_SAVE_DIR = "refs_live"                              # saved separately (no overwrite)
+MODEL_DIR = "./runs_ref/20260129_194854_ref"            # <-- your new best run folder
 
 
 # ---- Preprocess must match training ----
 transform = T.Compose([
-    T.Resize(IMG_SIZE),
+    T.Resize(IMG_SIZE_HW),
     T.ToTensor(),
     T.Normalize(mean=[0.5, 0.5, 0.5],
                 std=[0.5, 0.5, 0.5]),
@@ -66,17 +69,27 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Device:", device)
 
-    # ---- Load GLOBAL label stats (new pipeline) ----
-    stats = torch.load("./runs_ref/20260125_235217_ref/label_stats.pt", map_location="cpu")
+    # ---- Load label stats ----
+    stats_path = os.path.join(MODEL_DIR, "label_stats.pt")
+    stats = torch.load(stats_path, map_location="cpu")
     mean = stats["global"]["mean"]
     std = stats["global"]["std"]
-    print("Using label_stats.pt (global mean/std)")
+    print("Using:", stats_path)
     print("mean:", mean.tolist(), "std:", std.tolist())
 
-    # ---- Load model (diff input is still 3 channels) ----
-    model = LaserNet(in_channels=3).to(device)
-    model.load_state_dict(torch.load("./runs_ref/20260125_235217_ref/laser_net_best.pt", map_location=device))
+    # Optional visibility: baseline used for this seq during training (if present)
+    if "baseline_by_seq" in stats and SEQ_PROFILE in stats["baseline_by_seq"]:
+        b = stats["baseline_by_seq"][SEQ_PROFILE]
+        if isinstance(b, torch.Tensor):
+            b = b.tolist()
+        print(f"training baseline_by_seq[{SEQ_PROFILE}] =", b)
+
+    # ---- Load model (CONCAT => 6 channels) ----
+    model = LaserNet(in_channels=6).to(device)
+    weights_path = os.path.join(MODEL_DIR, "laser_net_best.pt")
+    model.load_state_dict(torch.load(weights_path, map_location=device))
     model.eval()
+    print("Loaded model:", weights_path)
 
     # ---- Open camera via V4L2 (KEEP THIS EXACTLY) ----
     cap = cv2.VideoCapture(DEVICE_PATH, cv2.CAP_V4L2)
@@ -105,10 +118,10 @@ def main():
 
     # ---- Warm-up (reduces first-infer overhead) ----
     with torch.no_grad():
-        dummy = torch.zeros(1, 3, IMG_SIZE[1], IMG_SIZE[0]).to(device)  # [1,3,H,W]
+        dummy = torch.zeros(1, 6, IMG_SIZE_HW[0], IMG_SIZE_HW[1]).to(device)  # [1,6,H,W]
         _ = model(dummy)
 
-    print("\nStarting inference (DIFF). Press 'q' to quit.")
+    print("\nStarting inference (CONCAT). Press 'q' to quit.")
 
     while True:
         ok, frame = cap.read()
@@ -122,8 +135,9 @@ def main():
         pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         cur = transform(pil).to(device)
 
-        # ---- DIFF INPUT ----
-        x = (cur - ref).unsqueeze(0)
+        # ---- CONCAT INPUT ----
+        # x = [cur, ref] along channel dimension -> [6,H,W]
+        x = torch.cat([cur, ref], dim=0).unsqueeze(0)
 
         t0 = time.time()
         with torch.no_grad():
@@ -142,7 +156,7 @@ def main():
                     (30, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
         cv2.putText(frame, f"Δaz={az:+.3f}  Δel={el:+.3f}",
                     (30, 120), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2)
-        cv2.imshow("Inference Preview (DIFF)", frame)
+        cv2.imshow("Inference Preview (CONCAT)", frame)
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break

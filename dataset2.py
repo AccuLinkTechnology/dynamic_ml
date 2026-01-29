@@ -8,8 +8,9 @@ from PIL import Image
 import pandas as pd
 import torchvision.transforms as T
 
-# IMPORTANT: IMG_SIZE IS (H, W)
-DEFAULT_IMG_SIZE: Tuple[int, int] = (180, 320)  # (H, W)
+
+# NOTE: torchvision Resize expects (H, W)
+DEFAULT_IMG_SIZE_HW: Tuple[int, int] = (180, 320)  # (H, W)
 
 
 @dataclass
@@ -20,86 +21,86 @@ class Stats:
 
 class LaserDatasetRef(Dataset):
     """
-    Command-space dataset for incremental control.
-
-    Label is:
-        y_cmd(t) = y_raw(t) - baseline(seq)
-
-    baseline strategies:
-      - "stable_m": choose M frames closest to reference (lowest mean abs diff) and average their labels.
-      - "first_k": choose K frames with smallest pic_number and average their labels.
-      - "seq_mean": average all labels.
-
     Returns:
-      inp, y_norm, seq, y_cmd_raw, y_raw
-    Also provides:
-      - stable_paths_by_seq: list of stable image paths used for baseline (or proxy stable set)
-      - get_stable_input(seq): returns an in-distribution "stable" input for auxiliary zero loss
+      inp:    [C,H,W]  (C=3 for diff/single, C=6 for concat)
+      y_norm: [2]      normalized command label (baseline-subtracted)
+      seq:    str
+      y_cmd:  [2]      command label in real units (baseline-subtracted)
+      y_raw:  [2]      raw label from CSV (original)
     """
 
     def __init__(
         self,
         root: str,
         seqs: Iterable[str],
-        img_size: Tuple[int, int] = DEFAULT_IMG_SIZE,
+        img_size_hw: Tuple[int, int] = DEFAULT_IMG_SIZE_HW,
         csv_root: Optional[str] = None,
         img_root: Optional[str] = None,
-        label_norm: str = "global",          # "global" | "none"
         strict: bool = False,
         augment: bool = False,
-        mode: str = "concat",               # "single" | "concat" | "diff"
-        stats_override: Optional[Stats] = None,
-
-        baseline_strategy: str = "stable_m", # "stable_m" | "first_k" | "seq_mean"
-        baseline_k: int = 5,
-        baseline_m: int = 10,
+        mode: str = "concat",  # "single" | "concat" | "diff"
+        # Label processing:
+        label_norm: str = "global",  # "global" | "none"
+        baseline_strategy: str = "stable_m",  # "none" | "stable_m"
+        baseline_m: int = 10,               # use first M frames for baseline estimate
+        # Stable cache:
+        stable_pool: int = 3,               # how many stable frames to cache per seq
     ):
         self.root = root
         self.seqs = list(seqs)
         self.csv_root = csv_root or root
         self.img_root = img_root or root
-        self.img_size = img_size
+        self.img_size_hw = img_size_hw
         self.label_norm = label_norm
         self.strict = strict
         self.augment = augment
         self.mode = mode
-        self.stats_override = stats_override
-
         self.baseline_strategy = baseline_strategy
-        self.baseline_k = int(baseline_k)
         self.baseline_m = int(baseline_m)
+        self.stable_pool = int(stable_pool)
 
-        if self.baseline_strategy not in ("stable_m", "first_k", "seq_mean"):
-            raise ValueError(f"baseline_strategy must be stable_m|first_k|seq_mean, got {baseline_strategy}")
-        if self.baseline_k <= 0:
-            raise ValueError("baseline_k must be >= 1")
-        if self.baseline_m <= 0:
-            raise ValueError("baseline_m must be >= 1")
-
-        # ---------- Transform ----------
-        tf_list = [
-            T.Resize(self.img_size, interpolation=T.InterpolationMode.BILINEAR),
-        ]
-        # NOTE: If you later enable augment, ref/current should be paired.
-        if augment:
-            tf_list += [T.ColorJitter(brightness=0.2, contrast=0.2)]
-        tf_list += [
+        # ---------------- transforms ----------------
+        base_tf = [
+            T.Resize(self.img_size_hw, interpolation=T.InterpolationMode.BILINEAR),
             T.ToTensor(),
-            T.Normalize(mean=[0.5, 0.5, 0.5],
-                        std=[0.5, 0.5, 0.5]),
         ]
-        self.transform = T.Compose(tf_list)
 
-        # Cache reference tensors per seq
+        if augment:
+            # mild physical-meaningful augments (safe defaults)
+            base_tf = [
+                T.Resize(self.img_size_hw, interpolation=T.InterpolationMode.BILINEAR),
+                T.ColorJitter(brightness=0.15, contrast=0.15),
+                # small translations mimic camera pose drift a bit
+                T.RandomAffine(
+                    degrees=0.0,
+                    translate=(0.02, 0.02),  # 2% shift
+                    scale=None,
+                    shear=None,
+                    interpolation=T.InterpolationMode.BILINEAR,
+                ),
+                T.ToTensor(),
+            ]
+
+        # normalize to [-1,1]
+        base_tf.append(T.Normalize(mean=[0.5, 0.5, 0.5],
+                                   std=[0.5, 0.5, 0.5]))
+        self.transform = T.Compose(base_tf)
+        # -------------------------------------------
+
+        # Cached reference tensors per sequence
         self.ref_tensor_by_seq: Dict[str, torch.Tensor] = {}
 
-        # Samples: (img_path, pic_number, y_raw, seq)
-        self.samples: List[Tuple[str, int, torch.Tensor, str]] = []
+        # Baseline per seq in REAL units (az, el)
+        self.baseline_by_seq: Dict[str, torch.Tensor] = {}
 
-        # Per-seq list: (pic_number, img_path, y_raw)
-        per_seq: Dict[str, List[Tuple[int, str, torch.Tensor]]] = {s: [] for s in self.seqs}
+        # Cached stable inputs per seq: list of tensors shaped like model input (diff/single/concat)
+        self.stable_inputs_by_seq: Dict[str, List[torch.Tensor]] = {}
 
-        # Load metadata + ref tensors
+        # Samples store: (img_path, y_raw, seq, pic_number)
+        self.samples: List[Tuple[str, torch.Tensor, str, int]] = []
+
+        # Build all samples and per-seq label lists for baseline
+        per_seq_rows: Dict[str, List[Tuple[int, str, torch.Tensor]]] = {}  # seq -> [(pic, path, y_raw)]
         for seq in self.seqs:
             csv_path = os.path.join(self.csv_root, f"{seq}.csv")
             seq_dir = os.path.join(self.img_root, seq)
@@ -109,6 +110,7 @@ class LaserDatasetRef(Dataset):
             if not os.path.isdir(seq_dir):
                 raise FileNotFoundError(f"Sequence folder not found: {seq_dir}")
 
+            # Reference image
             ref_path = os.path.join(seq_dir, f"{seq}_start 1.tga")
             if not os.path.exists(ref_path):
                 raise FileNotFoundError(f"Reference start image not found: {ref_path}")
@@ -121,12 +123,13 @@ class LaserDatasetRef(Dataset):
             if not required.issubset(df.columns):
                 raise ValueError(f"{csv_path} missing columns {required}")
 
+            rows: List[Tuple[int, str, torch.Tensor]] = []
             for _, row in df.iterrows():
                 pic = int(row["pic_number"])
-                img_path = os.path.join(seq_dir, f"{seq}_{pic} 1.tga")
+                problem_path = os.path.join(seq_dir, f"{seq}_{pic} 1.tga")
 
-                if not os.path.exists(img_path):
-                    msg = f"[WARN] Missing image, skipping: {img_path}"
+                if not os.path.exists(problem_path):
+                    msg = f"[WARN] Missing image, skipping: {problem_path}"
                     if strict:
                         raise FileNotFoundError(msg)
                     print(msg)
@@ -135,65 +138,70 @@ class LaserDatasetRef(Dataset):
                 az = float(row["delta_azimuth"])
                 el = float(row["delta_elevation"])
                 y_raw = torch.tensor([az, el], dtype=torch.float32)
+                rows.append((pic, problem_path, y_raw))
 
-                self.samples.append((img_path, pic, y_raw, seq))
-                per_seq[seq].append((pic, img_path, y_raw))
+            # sort by pic for "first M" baseline and stable pool
+            rows.sort(key=lambda x: x[0])
+            per_seq_rows[seq] = rows
+
+            for pic, path, y_raw in rows:
+                self.samples.append((path, y_raw, seq, pic))
 
         if len(self.samples) == 0:
             raise RuntimeError("No samples found.")
 
-        # ---------- Build baseline per seq + stable paths ----------
-        self.baseline_by_seq: Dict[str, torch.Tensor] = {}
-        self.stable_paths_by_seq: Dict[str, List[str]] = {}
-
-        for seq in self.seqs:
-            items = per_seq.get(seq, [])
-            if len(items) == 0:
+        # ---------------- baseline per seq ----------------
+        for seq, rows in per_seq_rows.items():
+            if self.baseline_strategy == "none":
                 self.baseline_by_seq[seq] = torch.zeros(2, dtype=torch.float32)
-                self.stable_paths_by_seq[seq] = []
                 continue
 
-            if self.baseline_strategy == "seq_mean":
-                ys = torch.stack([y for _pic, _path, y in items], dim=0)
-                self.baseline_by_seq[seq] = ys.mean(dim=0)
-                # pick a reasonable stable set for aux loss: smallest pic_number frames
-                items_sorted = sorted(items, key=lambda t: t[0])
-                m = min(self.baseline_m, len(items_sorted))
-                self.stable_paths_by_seq[seq] = [items_sorted[i][1] for i in range(m)]
-                continue
+            if self.baseline_strategy == "stable_m":
+                if len(rows) == 0:
+                    self.baseline_by_seq[seq] = torch.zeros(2, dtype=torch.float32)
+                    continue
+                m = min(self.baseline_m, len(rows))
+                y_stack = torch.stack([rows[i][2] for i in range(m)], dim=0)  # [m,2]
+                self.baseline_by_seq[seq] = y_stack.mean(dim=0)
+            else:
+                raise ValueError(f"Unknown baseline_strategy: {self.baseline_strategy}")
 
-            if self.baseline_strategy == "first_k":
-                items_sorted = sorted(items, key=lambda t: t[0])
-                k = min(self.baseline_k, len(items_sorted))
-                ys0 = torch.stack([items_sorted[i][2] for i in range(k)], dim=0)
-                self.baseline_by_seq[seq] = ys0.mean(dim=0)
-                # stable set = these same first-k frames (plus a few more if available)
-                m = min(max(k, self.baseline_m), len(items_sorted))
-                self.stable_paths_by_seq[seq] = [items_sorted[i][1] for i in range(m)]
-                continue
-
-            # stable_m: pick frames with smallest image diff magnitude to ref
+        # ---------------- build cached stable inputs ----------------
+        # Use first `stable_pool` images in each seq (same "stable prefix" concept)
+        for seq, rows in per_seq_rows.items():
             ref = self.ref_tensor_by_seq[seq]
-            scored: List[Tuple[float, str, torch.Tensor]] = []
-            for _pic, img_path, y in items:
+            stable_list: List[torch.Tensor] = []
+
+            k = min(self.stable_pool, len(rows))
+            for i in range(k):
+                _pic, img_path, _y_raw = rows[i]
                 img = Image.open(img_path).convert("RGB")
                 x = self.transform(img)
-                score = (x - ref).abs().mean().item()
-                scored.append((score, img_path, y))
-            scored.sort(key=lambda t: t[0])
+                inp = self._make_input(x, ref)
+                stable_list.append(inp)
 
-            m = min(self.baseline_m, len(scored))
-            ys0 = torch.stack([scored[i][2] for i in range(m)], dim=0)
-            self.baseline_by_seq[seq] = ys0.mean(dim=0)
-            self.stable_paths_by_seq[seq] = [scored[i][1] for i in range(m)]
+            # Fallback if sequence has no disturbed frames (rare)
+            if len(stable_list) == 0:
+                # use ref itself as "stable" proxy
+                if self.mode == "single":
+                    stable_list = [ref]
+                elif self.mode == "concat":
+                    stable_list = [torch.cat([ref, ref], dim=0)]
+                elif self.mode == "diff":
+                    stable_list = [ref - ref]
+                else:
+                    raise ValueError(f"Unknown mode {self.mode}")
 
-        # ---------- Global stats in COMMAND space ----------
-        cmd_all: List[torch.Tensor] = []
-        for _img_path, _pic, y_raw, seq in self.samples:
-            y0 = self.baseline_by_seq.get(seq, torch.zeros(2, dtype=torch.float32))
-            cmd_all.append(y_raw - y0)
-        t_all = torch.stack(cmd_all, dim=0)
+            self.stable_inputs_by_seq[seq] = stable_list
 
+        # ---------------- global label stats on COMMAND ----------------
+        # y_cmd = y_raw - baseline(seq)
+        y_cmd_all = []
+        for _path, y_raw, seq, _pic in self.samples:
+            y_cmd = y_raw - self.baseline_by_seq[seq]
+            y_cmd_all.append(y_cmd)
+
+        t_all = torch.stack(y_cmd_all, dim=0)  # [N,2]
         self.global_stats = Stats(
             mean=t_all.mean(dim=0),
             std=t_all.std(dim=0).clamp_min(1e-6),
@@ -202,53 +210,39 @@ class LaserDatasetRef(Dataset):
     def __len__(self):
         return len(self.samples)
 
-    def _norm(self, y_cmd: torch.Tensor) -> torch.Tensor:
-        if self.label_norm == "none":
-            return y_cmd
-        stats = self.stats_override if self.stats_override is not None else self.global_stats
-        return (y_cmd - stats.mean) / stats.std
-
     def _make_input(self, x: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
         if self.mode == "single":
             return x
         if self.mode == "concat":
             return torch.cat([x, ref], dim=0)  # [6,H,W]
         if self.mode == "diff":
-            return x - ref                     # [3,H,W]
+            return x - ref
         raise ValueError(f"Unknown mode {self.mode}")
 
+    def _norm_label(self, y_cmd: torch.Tensor) -> torch.Tensor:
+        if self.label_norm == "none":
+            return y_cmd
+        return (y_cmd - self.global_stats.mean) / self.global_stats.std
+
     def get_stable_input(self, seq: str, stable_idx: int = 0) -> torch.Tensor:
-        """
-        Returns an in-distribution 'stable' input for auxiliary loss.
-        Uses one of the stable paths chosen for baseline.
-        """
-        paths = self.stable_paths_by_seq.get(seq, [])
-        if not paths:
-            # fallback: ref-based input
-            ref = self.ref_tensor_by_seq[seq]
-            if self.mode == "diff":
-                return torch.zeros_like(ref)
-            if self.mode == "concat":
-                return torch.cat([ref, ref], dim=0)
-            return ref
+        """Returns cached stable input tensor for given seq."""
+        pool = self.stable_inputs_by_seq[seq]
+        if len(pool) == 0:
+            raise RuntimeError(f"No stable pool for seq={seq}")
+        stable_idx = int(stable_idx) % len(pool)
+        return pool[stable_idx]
 
-        stable_idx = max(0, min(stable_idx, len(paths) - 1))
-        img_path = paths[stable_idx]
-        img = Image.open(img_path).convert("RGB")
-        x = self.transform(img)
-        ref = self.ref_tensor_by_seq[seq]
-        return self._make_input(x, ref)
-
-    def __getitem__(self, idx):
-        img_path, _pic, y_raw, seq = self.samples[idx]
+    def __getitem__(self, idx: int):
+        img_path, y_raw, seq, _pic = self.samples[idx]
 
         img = Image.open(img_path).convert("RGB")
         x = self.transform(img)
+
         ref = self.ref_tensor_by_seq[seq]
         inp = self._make_input(x, ref)
 
-        y0 = self.baseline_by_seq.get(seq, torch.zeros(2, dtype=torch.float32))
-        y_cmd = y_raw - y0
-        y_norm = self._norm(y_cmd)
+        # COMMAND label (what you want to send to motors)
+        y_cmd = y_raw - self.baseline_by_seq[seq]
+        y_norm = self._norm_label(y_cmd)
 
         return inp, y_norm, seq, y_cmd, y_raw

@@ -8,7 +8,7 @@ sudo docker run --rm -it --runtime nvidia --network host   -v /home/nvidia/Docum
 
 python3 - <<'PY'
 import torch
-p="runs_ref/20260129_183328_ref/label_stats.pt"
+p="runs_ref/20260129_213244_ref/label_stats.pt"
 d=torch.load(p, map_location="cpu")
 print("label_norm:", d["label_norm"])
 print("img_size:", d["img_size"])
@@ -16,3 +16,33 @@ print("mode:", d["mode"])
 print("mean:", d["global"]["mean"].tolist())
 print("std :", d["global"]["std"].tolist())
 PY
+
+python3 - <<'PY'
+import torch, sys
+p = sys.argv[1] if len(sys.argv)>1 else "runs_ref/20260129_213244_ref/label_stats.pt"
+d = torch.load(p, map_location="cpu")
+
+print("label_norm:", d.get("label_norm"))
+print("img_size:", d.get("img_size"))
+print("mode:", d.get("mode"))
+
+g = d.get("global", {})
+if "mean" in g and "std" in g:
+    print("mean:", g["mean"].tolist())
+    print("std :", g["std"].tolist())
+else:
+    print("No global mean/std found; keys:", list(d.keys()))
+
+# If per-sequence means exist:
+seq = d.get("seq", None) or d.get("per_seq", None) or d.get("seq_means", None)
+if isinstance(seq, dict):
+    print("\nPer-seq means found for:", sorted(seq.keys()))
+    # print a few
+    for k in sorted(seq.keys())[:10]:
+        v = seq[k]
+        if isinstance(v, dict) and "mean" in v:
+            print(k, "mean:", v["mean"].tolist())
+        elif hasattr(v, "tolist"):
+            print(k, "mean:", v.tolist())
+PY
+
