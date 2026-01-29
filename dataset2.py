@@ -22,18 +22,21 @@ class LaserDatasetRef(Dataset):
     """
     Command-space dataset for incremental control.
 
-    We build a per-sequence baseline y0 and train on:
-        y_cmd(t) = y_raw(t) - y0(seq)
+    Label is:
+        y_cmd(t) = y_raw(t) - baseline(seq)
 
-    Baseline options:
-      - "stable_m": choose M frames whose images are closest to the ref image (lowest mean abs diff),
-                    and average their labels as y0.
-      - "first_k":  choose first K smallest pic_number and average their labels as y0.
-      - "seq_mean": average all labels in the sequence as y0.
+    baseline strategies:
+      - "stable_m": choose M frames closest to reference (lowest mean abs diff) and average their labels.
+      - "first_k": choose K frames with smallest pic_number and average their labels.
+      - "seq_mean": average all labels.
 
     Returns:
       inp, y_norm, seq, y_cmd_raw, y_raw
+    Also provides:
+      - stable_paths_by_seq: list of stable image paths used for baseline (or proxy stable set)
+      - get_stable_input(seq): returns an in-distribution "stable" input for auxiliary zero loss
     """
+
     def __init__(
         self,
         root: str,
@@ -44,12 +47,12 @@ class LaserDatasetRef(Dataset):
         label_norm: str = "global",          # "global" | "none"
         strict: bool = False,
         augment: bool = False,
-        mode: str = "diff",                  # "single" | "concat" | "diff"
+        mode: str = "concat",               # "single" | "concat" | "diff"
         stats_override: Optional[Stats] = None,
 
         baseline_strategy: str = "stable_m", # "stable_m" | "first_k" | "seq_mean"
-        baseline_k: int = 5,                 # used by first_k
-        baseline_m: int = 10,                # used by stable_m
+        baseline_k: int = 5,
+        baseline_m: int = 10,
     ):
         self.root = root
         self.seqs = list(seqs)
@@ -77,7 +80,7 @@ class LaserDatasetRef(Dataset):
         tf_list = [
             T.Resize(self.img_size, interpolation=T.InterpolationMode.BILINEAR),
         ]
-        # NOTE: augmentation disabled by default; if enabled later, should be paired for ref+current.
+        # NOTE: If you later enable augment, ref/current should be paired.
         if augment:
             tf_list += [T.ColorJitter(brightness=0.2, contrast=0.2)]
         tf_list += [
@@ -86,15 +89,14 @@ class LaserDatasetRef(Dataset):
                         std=[0.5, 0.5, 0.5]),
         ]
         self.transform = T.Compose(tf_list)
-        # -----------------------------
 
-        # Cache reference tensor per seq
+        # Cache reference tensors per seq
         self.ref_tensor_by_seq: Dict[str, torch.Tensor] = {}
 
         # Samples: (img_path, pic_number, y_raw, seq)
         self.samples: List[Tuple[str, int, torch.Tensor, str]] = []
 
-        # Per-seq list of (pic_number, img_path, y_raw)
+        # Per-seq list: (pic_number, img_path, y_raw)
         per_seq: Dict[str, List[Tuple[int, str, torch.Tensor]]] = {s: [] for s in self.seqs}
 
         # Load metadata + ref tensors
@@ -140,17 +142,24 @@ class LaserDatasetRef(Dataset):
         if len(self.samples) == 0:
             raise RuntimeError("No samples found.")
 
-        # ---------- Build baseline per seq ----------
+        # ---------- Build baseline per seq + stable paths ----------
         self.baseline_by_seq: Dict[str, torch.Tensor] = {}
+        self.stable_paths_by_seq: Dict[str, List[str]] = {}
+
         for seq in self.seqs:
             items = per_seq.get(seq, [])
             if len(items) == 0:
                 self.baseline_by_seq[seq] = torch.zeros(2, dtype=torch.float32)
+                self.stable_paths_by_seq[seq] = []
                 continue
 
             if self.baseline_strategy == "seq_mean":
                 ys = torch.stack([y for _pic, _path, y in items], dim=0)
                 self.baseline_by_seq[seq] = ys.mean(dim=0)
+                # pick a reasonable stable set for aux loss: smallest pic_number frames
+                items_sorted = sorted(items, key=lambda t: t[0])
+                m = min(self.baseline_m, len(items_sorted))
+                self.stable_paths_by_seq[seq] = [items_sorted[i][1] for i in range(m)]
                 continue
 
             if self.baseline_strategy == "first_k":
@@ -158,28 +167,33 @@ class LaserDatasetRef(Dataset):
                 k = min(self.baseline_k, len(items_sorted))
                 ys0 = torch.stack([items_sorted[i][2] for i in range(k)], dim=0)
                 self.baseline_by_seq[seq] = ys0.mean(dim=0)
+                # stable set = these same first-k frames (plus a few more if available)
+                m = min(max(k, self.baseline_m), len(items_sorted))
+                self.stable_paths_by_seq[seq] = [items_sorted[i][1] for i in range(m)]
                 continue
 
             # stable_m: pick frames with smallest image diff magnitude to ref
             ref = self.ref_tensor_by_seq[seq]
-            scored: List[Tuple[float, torch.Tensor]] = []
+            scored: List[Tuple[float, str, torch.Tensor]] = []
             for _pic, img_path, y in items:
                 img = Image.open(img_path).convert("RGB")
                 x = self.transform(img)
-                score = (x - ref).abs().mean().item()  # scalar “how disturbed”
-                scored.append((score, y))
+                score = (x - ref).abs().mean().item()
+                scored.append((score, img_path, y))
             scored.sort(key=lambda t: t[0])
-            m = min(self.baseline_m, len(scored))
-            ys0 = torch.stack([scored[i][1] for i in range(m)], dim=0)
-            self.baseline_by_seq[seq] = ys0.mean(dim=0)
 
-        # ---------- Global stats computed in COMMAND space ----------
+            m = min(self.baseline_m, len(scored))
+            ys0 = torch.stack([scored[i][2] for i in range(m)], dim=0)
+            self.baseline_by_seq[seq] = ys0.mean(dim=0)
+            self.stable_paths_by_seq[seq] = [scored[i][1] for i in range(m)]
+
+        # ---------- Global stats in COMMAND space ----------
         cmd_all: List[torch.Tensor] = []
         for _img_path, _pic, y_raw, seq in self.samples:
             y0 = self.baseline_by_seq.get(seq, torch.zeros(2, dtype=torch.float32))
             cmd_all.append(y_raw - y0)
-
         t_all = torch.stack(cmd_all, dim=0)
+
         self.global_stats = Stats(
             mean=t_all.mean(dim=0),
             std=t_all.std(dim=0).clamp_min(1e-6),
@@ -194,22 +208,44 @@ class LaserDatasetRef(Dataset):
         stats = self.stats_override if self.stats_override is not None else self.global_stats
         return (y_cmd - stats.mean) / stats.std
 
+    def _make_input(self, x: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
+        if self.mode == "single":
+            return x
+        if self.mode == "concat":
+            return torch.cat([x, ref], dim=0)  # [6,H,W]
+        if self.mode == "diff":
+            return x - ref                     # [3,H,W]
+        raise ValueError(f"Unknown mode {self.mode}")
+
+    def get_stable_input(self, seq: str, stable_idx: int = 0) -> torch.Tensor:
+        """
+        Returns an in-distribution 'stable' input for auxiliary loss.
+        Uses one of the stable paths chosen for baseline.
+        """
+        paths = self.stable_paths_by_seq.get(seq, [])
+        if not paths:
+            # fallback: ref-based input
+            ref = self.ref_tensor_by_seq[seq]
+            if self.mode == "diff":
+                return torch.zeros_like(ref)
+            if self.mode == "concat":
+                return torch.cat([ref, ref], dim=0)
+            return ref
+
+        stable_idx = max(0, min(stable_idx, len(paths) - 1))
+        img_path = paths[stable_idx]
+        img = Image.open(img_path).convert("RGB")
+        x = self.transform(img)
+        ref = self.ref_tensor_by_seq[seq]
+        return self._make_input(x, ref)
+
     def __getitem__(self, idx):
         img_path, _pic, y_raw, seq = self.samples[idx]
 
         img = Image.open(img_path).convert("RGB")
         x = self.transform(img)
-
         ref = self.ref_tensor_by_seq[seq]
-
-        if self.mode == "single":
-            inp = x
-        elif self.mode == "concat":
-            inp = torch.cat([x, ref], dim=0)  # [6,H,W]
-        elif self.mode == "diff":
-            inp = x - ref                     # [3,H,W]
-        else:
-            raise ValueError(f"Unknown mode {self.mode}")
+        inp = self._make_input(x, ref)
 
         y0 = self.baseline_by_seq.get(seq, torch.zeros(2, dtype=torch.float32))
         y_cmd = y_raw - y0

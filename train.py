@@ -1,5 +1,7 @@
 import os
 import time
+from collections import defaultdict
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -28,22 +30,25 @@ def pick_data_root() -> str:
 # -------------------------
 DATA_ROOT = pick_data_root()
 
+# Keep seq-level split (this is correct). We will now print per-seq validation metrics too.
 VAL_SEQS = ["seq5", "seq3"]
 TRAIN_SEQS = ["seq1", "seq2", "seq4", "seq6", "seq7", "seq8", "seq9", "seq10", "seq11", "seq12", "seq13"]
 
 IMG_SIZE = (180, 320)  # (H, W)
 
-MODE = "diff"          # keep diff first; we can A/B test concat later
+# (A/B) Default to concat now (helps domain shift / geometry differences)
+MODE = "concat"        # "diff" or "concat" (try concat first)
 
 LABEL_NORM = "global"
 
-# (1) Baseline = stable frames closest to ref
+# Baseline = stable frames closest to ref
 BASELINE_STRATEGY = "stable_m"
-BASELINE_M = 10        # try 10; we can tune 5/15
-BASELINE_K = 5         # unused for stable_m, but kept for completeness
+BASELINE_M = 10
+BASELINE_K = 5
 
-# (2) Zero-at-reference auxiliary loss
-ZERO_LOSS_W = 0.20     # 0.1–0.3 reasonable; start 0.2
+# Realistic zero-at-stable auxiliary loss (NO all-zero batches)
+ZERO_LOSS_W = 0.20     # keep 0.2 for now; can tune 0.1–0.3
+ZERO_STABLE_IDX = 0    # use the most stable frame (0). You can try 1 or 2.
 
 AUGMENT = False
 
@@ -81,38 +86,11 @@ def save_label_stats(train_ds: LaserDatasetRef, path: str):
 
 
 def unnormalize(pred_norm: torch.Tensor, stats: dict) -> torch.Tensor:
-    """Undo global normalization, returning predictions in COMMAND space."""
     if stats.get("label_norm", "none") == "none":
         return pred_norm
     mean = stats["global"]["mean"]
     std = stats["global"]["std"]
     return pred_norm * std + mean
-
-
-def make_zero_inputs(mode: str, seqs, train_ds: LaserDatasetRef) -> torch.Tensor:
-    """
-    Build a 'no-change' input batch to enforce output ~0 when stable.
-    - diff: all zeros
-    - concat: [ref, ref]
-    - single: ref
-    Returned tensor is CPU; caller moves to device.
-    """
-    if mode == "diff":
-        # shape based on ref
-        any_seq = seqs[0]
-        ref = train_ds.ref_tensor_by_seq[any_seq]
-        b = len(seqs)
-        return torch.zeros((b, 3, ref.shape[1], ref.shape[2]), dtype=ref.dtype)
-
-    refs = [train_ds.ref_tensor_by_seq[s] for s in seqs]
-    ref_batch = torch.stack(refs, dim=0)  # [B,3,H,W]
-
-    if mode == "single":
-        return ref_batch
-    if mode == "concat":
-        return torch.cat([ref_batch, ref_batch], dim=1)  # [B,6,H,W]
-
-    raise ValueError(f"Unknown mode for zero inputs: {mode}")
 
 
 def main():
@@ -124,7 +102,7 @@ def main():
     print("MODE:", MODE)
     print("LABEL_NORM:", LABEL_NORM)
     print("BASELINE_STRATEGY:", BASELINE_STRATEGY, "| BASELINE_M:", BASELINE_M)
-    print("ZERO_LOSS_W:", ZERO_LOSS_W)
+    print("ZERO_LOSS_W:", ZERO_LOSS_W, "| ZERO_STABLE_IDX:", ZERO_STABLE_IDX)
     print("TRAIN_SEQS:", TRAIN_SEQS)
     print("VAL_SEQS:", VAL_SEQS)
 
@@ -139,8 +117,6 @@ def main():
         baseline_k=BASELINE_K,
     )
 
-    # Val: baseline computed from val frames (ok for offline evaluation),
-    # but normalization MUST use train stats
     val_ds = LaserDatasetRef(
         DATA_ROOT, VAL_SEQS,
         img_size=IMG_SIZE,
@@ -150,7 +126,7 @@ def main():
         baseline_strategy=BASELINE_STRATEGY,
         baseline_m=BASELINE_M,
         baseline_k=BASELINE_K,
-        stats_override=train_ds.global_stats,
+        stats_override=train_ds.global_stats,  # IMPORTANT
     )
 
     print("Train n =", len(train_ds))
@@ -158,7 +134,6 @@ def main():
 
     stats_path = os.path.join(RUN_DIR, "label_stats.pt")
     save_label_stats(train_ds, stats_path)
-
     try:
         stats = torch.load(stats_path, weights_only=True, map_location="cpu")
     except TypeError:
@@ -191,7 +166,6 @@ def main():
 
     criterion = nn.SmoothL1Loss(beta=1.0)
     optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=8, min_lr=1e-6
     )
@@ -216,12 +190,16 @@ def main():
             pred = model(x)
             loss_main = criterion(pred, y_norm)
 
-            # (2) zero-at-reference auxiliary loss
+            # (2) Realistic "zero" loss using stable frames per seq (in-distribution)
             seqs_list = list(seqs)
-            x0 = make_zero_inputs(MODE, seqs_list, train_ds).to(device, non_blocking=pin)
-            y0 = torch.zeros((x0.size(0), 2), device=device, dtype=pred.dtype)
-            pred0 = model(x0)
-            loss_zero = criterion(pred0, y0)
+            x_stable = torch.stack(
+                [train_ds.get_stable_input(s, stable_idx=ZERO_STABLE_IDX) for s in seqs_list],
+                dim=0
+            ).to(device, non_blocking=pin)
+            y0 = torch.zeros((x_stable.size(0), 2), device=device, dtype=pred.dtype)
+
+            pred_stable = model(x_stable)
+            loss_zero = criterion(pred_stable, y0)
 
             loss = loss_main + ZERO_LOSS_W * loss_zero
             loss.backward()
@@ -235,12 +213,18 @@ def main():
         # ---- validate (COMMAND space) ----
         model.eval()
         val_loss_sum = 0.0
+
         mae_sum = torch.zeros(2)
         err_sum = torch.zeros(2)
         n_val = 0
 
+        # per-seq accumulators
+        per_seq_mae = defaultdict(lambda: torch.zeros(2))
+        per_seq_err = defaultdict(lambda: torch.zeros(2))
+        per_seq_n = defaultdict(int)
+
         with torch.no_grad():
-            for x, y_norm, _seqs, y_cmd_raw, _y_raw in val_loader:
+            for x, y_norm, seqs, y_cmd_raw, _y_raw in val_loader:
                 x = x.to(device, non_blocking=pin)
                 y_norm = y_norm.to(device, non_blocking=pin)
 
@@ -248,12 +232,19 @@ def main():
                 loss = criterion(pred_norm, y_norm)
                 val_loss_sum += loss.item() * x.size(0)
 
-                pred_cmd = unnormalize(pred_norm.cpu(), stats)
-                diff = (pred_cmd - y_cmd_raw)
+                pred_cmd = unnormalize(pred_norm.cpu(), stats)  # COMMAND space
+                diff = (pred_cmd - y_cmd_raw)                  # COMMAND error
 
                 mae_sum += diff.abs().sum(dim=0)
                 err_sum += diff.sum(dim=0)
                 n_val += x.size(0)
+
+                # per-seq
+                for i, s in enumerate(seqs):
+                    s = str(s)
+                    per_seq_mae[s] += diff[i].abs()
+                    per_seq_err[s] += diff[i]
+                    per_seq_n[s] += 1
 
         val_loss = val_loss_sum / max(1, n_val)
         mae = (mae_sum / max(1, n_val)).tolist()
@@ -262,16 +253,25 @@ def main():
         scheduler.step(val_loss)
         lr_now = optimizer.param_groups[0]["lr"]
 
-        # Bias-aware score for robot safety
         score = val_loss + BIAS_LAMBDA * (abs(bias[0]) + abs(bias[1]))
 
         dt = time.time() - t0
         print(
             f"Epoch {epoch:03d} | lr={lr_now:.2e} | train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | "
             f"MAE_CMD(az,el)=({mae[0]:.3f}, {mae[1]:.3f}) | "
-            f"BIAS_CMD(az,el)=({bias[0]:.3f}, {bias[1]:.3f}) | "
-            f"score={score:.4f} | {dt:.1f}s"
+            f"BIAS_CMD(az,el)=({bias[0]:.3f}, {bias[1]:.3f}) | score={score:.4f} | {dt:.1f}s"
         )
+
+        # print per-seq val metrics every epoch (small val set)
+        parts = []
+        for s in sorted(per_seq_n.keys()):
+            n = per_seq_n[s]
+            if n == 0:
+                continue
+            mae_s = (per_seq_mae[s] / n).tolist()
+            bias_s = (per_seq_err[s] / n).tolist()
+            parts.append(f"{s}: MAE=({mae_s[0]:.3f},{mae_s[1]:.3f}) BIAS=({bias_s[0]:.3f},{bias_s[1]:.3f}) n={n}")
+        print("  Val per-seq | " + " | ".join(parts))
 
         if score < best_score:
             best_score = score
