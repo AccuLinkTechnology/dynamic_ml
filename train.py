@@ -33,9 +33,10 @@ DATA_ROOT = pick_data_root()
 
 # Choose a "big + small" holdout set.
 # Adjust if you prefer: e.g. big from seq6+ and small from seq3/4/5/2.
-VAL_SEQS = ["seq5", "seq14"]          # keep what you're using, or change to ["seq1","seq5"]
+VAL_SEQS = ["seq5", "seq20"]          # keep what you're using, or change to ["seq1","seq5"]
 ALL_SEQS = ["seq1", "seq2", "seq3", "seq4", "seq5",
-            "seq6", "seq7", "seq8", "seq9", "seq10", "seq11", "seq12", "seq13", "seq14"]
+            "seq6", "seq7", "seq8", "seq9", "seq10", "seq11", "seq12", "seq13", "seq14",
+            "seq15", "seq16", "seq17", "seq18", "seq19", "seq20"]
 TRAIN_SEQS = [s for s in ALL_SEQS if s not in set(VAL_SEQS)]
 
 IMG_SIZE_HW = DEFAULT_IMG_SIZE_HW     # (H,W) = (180,320)
