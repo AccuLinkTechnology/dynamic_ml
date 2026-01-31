@@ -16,7 +16,7 @@
     - No IMU or inclinometer in the dynamic current system (camera-only perception).
 
 //Dataset
-    - Initially ~300 images across 5 sequences; expanded to ~900 images across 13 sequences.
+    - Initially ~1400 images across 20 sequences. Some sequences smaller trhan others. (2, 3,4, 5 : 38-50 ish). 1 is 209. Rest vary between ~72 and ~100.
     - Each sequence has:
         - A reference frame (seqX_start 1.tga)
         - Multiple disturbed frames (seqX_N 1.tga)
@@ -38,6 +38,9 @@
 
 //Potential Fixes 
     - Pipeline-Specific
+        -Altering pipeline to be more permissive: +-0.1 (due to the nature of a bullseye on a wall: anywhere in it is ok).
+        -Not very good at picking up on crosses all the time? Maybe cross finding model.
+
     	- Altering Model
         - Re-center or re-label sequences: subtract per-sequence mean delta before training.
         - Train CNN to predict change-from-reference only (remove absolute motor offsets).

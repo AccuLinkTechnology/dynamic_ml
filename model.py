@@ -4,15 +4,13 @@ import torch.nn as nn
 
 class LaserNet(nn.Module):
     """
-    Robotics-friendly small CNN:
-      - GroupNorm instead of BatchNorm (stable for small batch sizes and domain shift)
-      - modest depth/capacity
+    Small CNN for regression (Δaz, Δel).
+    GroupNorm works well for small batch sizes and domain shift.
     """
     def __init__(self, in_channels=3, gn_groups=8):
         super().__init__()
 
         def gn(c):
-            # groups must divide channels; fall back if needed
             g = gn_groups
             while c % g != 0 and g > 1:
                 g //= 2

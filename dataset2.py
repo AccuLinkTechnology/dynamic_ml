@@ -51,6 +51,10 @@ class LaserDatasetRef(Dataset):
         use_cross_roi: bool = True,
         roi_bg_weight: float = 0.20,        # background weight in [0..1], lower = stronger focus
         roi_strength: float = 1.00,         # 1.0 = use mask as-is; >1 boosts ROI contrast slightly
+        # IMPORTANT: make val use train stats
+        external_stats: Optional[Stats] = None,
+        # IMPORTANT: make ROI stable per sequence
+        roi_from: str = "ref",              # "ref" | "frame" (ref is recommended)
     ):
         self.root = root
         self.seqs = list(seqs)
@@ -68,18 +72,23 @@ class LaserDatasetRef(Dataset):
         self.use_cross_roi = bool(use_cross_roi)
         self.roi_bg_weight = float(roi_bg_weight)
         self.roi_strength = float(roi_strength)
+        self.external_stats = external_stats
+        self.roi_from = str(roi_from)
+
+        if self.roi_from not in ("ref", "frame"):
+            raise ValueError(f"roi_from must be 'ref' or 'frame', got: {self.roi_from}")
 
         # ---------------- transforms ----------------
         base_tf = [
-            T.Resize(self.img_size_hw, interpolation=T.InterpolationMode.BILINEAR),
+            T.Resize(self.img_size_hw_allow_hw(), interpolation=T.InterpolationMode.BILINEAR),
             T.ToTensor(),  # [0,1]
         ]
 
         if augment:
             # mild physically-meaningful augments
             base_tf = [
-                T.Resize(self.img_size_hw, interpolation=T.InterpolationMode.BILINEAR),
-                T.ColorJitter(brightness=0.15, contrast=0.15),
+                T.Resize(self.img_size_hw_allow_hw(), interpolation=T.InterpolationMode.BILINEAR),
+                T.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.15, hue=0.03),
                 T.RandomAffine(
                     degrees=0.0,
                     translate=(0.02, 0.02),
@@ -89,13 +98,18 @@ class LaserDatasetRef(Dataset):
             ]
 
         # normalize to [-1,1]
-        base_tf.append(T.Normalize(mean=[0.5, 0.5, 0.5],
-                                   std=[0.5, 0.5, 0.5]))
+        base_tf.append(
+            T.Normalize(mean=[0.5, 0.5, 0.5],
+                        std=[0.5, 0.5, 0.5])
+        )
         self.transform = T.Compose(base_tf)
         # -------------------------------------------
 
-        # Cached reference tensors per sequence (normalized [-1,1], NO ROI baked in)
+        # Cached reference tensors per sequence (normalized [-1,1], ROI NOT baked in)
         self.ref_tensor_by_seq: Dict[str, torch.Tensor] = {}
+
+        # Optional cached ROI masks per sequence: [1,H,W] float in [bg..1]
+        self.roi_mask_by_seq: Dict[str, Optional[torch.Tensor]] = {}
 
         # Baseline per seq in REAL units (az, el)
         self.baseline_by_seq: Dict[str, torch.Tensor] = {}
@@ -124,6 +138,12 @@ class LaserDatasetRef(Dataset):
 
             ref_img = Image.open(ref_path).convert("RGB")
             self.ref_tensor_by_seq[seq] = self.transform(ref_img)
+
+            # Cache ROI mask per sequence (recommended: from reference)
+            if self.use_cross_roi and self.roi_from == "ref":
+                self.roi_mask_by_seq[seq] = self._roi_weight_from_pil(ref_img)
+            else:
+                self.roi_mask_by_seq[seq] = None
 
             df = pd.read_csv(csv_path)
             required = {"pic_number", "delta_azimuth", "delta_elevation"}
@@ -185,11 +205,19 @@ class LaserDatasetRef(Dataset):
                 # x is normalized [-1,1]
                 x = self.transform(img_pil)
 
-                # Apply ROI mask computed from THIS stable frame to both x and ref
+                # ROI weighting (stable per-seq, or from each frame if configured)
                 if self.use_cross_roi:
-                    w = self._roi_weight_from_pil(img_pil)  # [1,H,W] float
-                    x2 = apply_cross_roi_weight(x, w)
-                    ref2 = apply_cross_roi_weight(ref, w)
+                    if self.roi_from == "ref":
+                        w = self.roi_mask_by_seq[seq]
+                        if w is not None:
+                            x2 = apply_cross_roi_weight(x, w)
+                            ref2 = apply_cross_roi_weight(ref, w)
+                        else:
+                            x2, ref2 = x, ref
+                    else:
+                        w = self._roi_weight_from_pil(img_pil)
+                        x2 = apply_cross_roi_weight(x, w)
+                        ref2 = apply_cross_roi_weight(ref, w)
                 else:
                     x2, ref2 = x, ref
 
@@ -197,7 +225,7 @@ class LaserDatasetRef(Dataset):
                 stable_list.append(inp)
 
             if len(stable_list) == 0:
-                # fallback if no disturbed frames
+                # fallback
                 if self.mode == "single":
                     stable_list = [ref]
                 elif self.mode == "concat":
@@ -216,10 +244,19 @@ class LaserDatasetRef(Dataset):
             y_cmd_all.append(y_cmd)
 
         t_all = torch.stack(y_cmd_all, dim=0)  # [N,2]
-        self.global_stats = Stats(
-            mean=t_all.mean(dim=0),
-            std=t_all.std(dim=0).clamp_min(1e-6),
-        )
+
+        if self.external_stats is not None:
+            # Use train stats for val (critical for correctness)
+            self.global_stats = self.external_stats
+        else:
+            self.global_stats = Stats(
+                mean=t_all.mean(dim=0),
+                std=t_all.std(dim=0).clamp_min(1e-6),
+            )
+
+    def img_size_hw_allow_hw(self) -> Tuple[int, int]:
+        # torchvision uses (H, W); keep helper in case you want to swap later
+        return self.img_size_hw
 
     def __len__(self):
         return len(self.samples)
@@ -231,13 +268,11 @@ class LaserDatasetRef(Dataset):
         rr = build_cross_weight_mask(img_pil, out_hw=self.img_size_hw, bg_weight=self.roi_bg_weight)
         w = rr.mask_hw  # already in [bg..1]
 
-        # Optional "strength": slightly increase contrast between ROI and bg
-        # Convert to raw mask in [0..1], apply gamma-like shaping, back to [bg..1]
+        # Optional "strength": increase contrast between ROI and bg
         if self.roi_strength != 1.0:
             bg = self.roi_bg_weight
             raw = (w - bg) / max(1e-6, (1.0 - bg))
             raw = raw.clamp(0.0, 1.0)
-            # strength >1 boosts ROI; strength <1 softens it
             raw = raw.pow(1.0 / max(1e-6, self.roi_strength))
             w = bg + (1.0 - bg) * raw
 
@@ -272,9 +307,15 @@ class LaserDatasetRef(Dataset):
         ref = self.ref_tensor_by_seq[seq]    # [-1,1]
 
         if self.use_cross_roi:
-            w = self._roi_weight_from_pil(img_pil)
-            x = apply_cross_roi_weight(x, w)
-            ref = apply_cross_roi_weight(ref, w)
+            if self.roi_from == "ref":
+                w = self.roi_mask_by_seq[seq]
+                if w is not None:
+                    x = apply_cross_roi_weight(x, w)
+                    ref = apply_cross_roi_weight(ref, w)
+            else:
+                w = self._roi_weight_from_pil(img_pil)
+                x = apply_cross_roi_weight(x, w)
+                ref = apply_cross_roi_weight(ref, w)
 
         inp = self._make_input(x, ref)
 
