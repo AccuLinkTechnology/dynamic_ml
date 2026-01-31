@@ -46,3 +46,17 @@ if isinstance(seq, dict):
             print(k, "mean:", v.tolist())
 PY
 
+python - << 'EOF'
+import torch
+
+stats = torch.load("runs_ref/<RUN_DIR_NAME>/label_stats.pt", map_location="cpu")
+print("TRAIN_SEQS:", stats["train_seqs"])
+print("VAL_SEQS:", stats["val_seqs"])
+print("MODE:", stats["mode"])
+print("IMG_SIZE:", stats["img_size_hw"])
+print("LABEL_NORM:", stats["label_norm"])
+print("CMD mean:", stats["global"]["mean"])
+print("CMD std :", stats["global"]["std"])
+print("BASELINE_STRATEGY:", stats["baseline_strategy"])
+print("BASELINE_M:", stats["baseline_m"])
+EOF
