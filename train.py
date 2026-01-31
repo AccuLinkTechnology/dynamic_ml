@@ -185,7 +185,7 @@ def main():
 
     stats_path = os.path.join(RUN_DIR, "label_stats.pt")
     save_label_stats(train_ds, stats_path)
-    stats = torch.load(stats_path, map_location="cpu")
+    stats = torch.load(stats_path, map_location="cpu", weights_only=True)
     print("Saved", stats_path)
 
     print("Train CMD mean:", stats["global"]["mean"].tolist())
@@ -239,6 +239,10 @@ def main():
         train_loss_sum = 0.0
         n_train = 0
 
+        mean = train_ds.global_stats.mean.to(device)
+        std = train_ds.global_stats.std.to(device)
+        zero_target_base = (-mean / std).unsqueeze(0)  # sha
+
         for x, y_norm, seqs, y_cmd, _y_raw, img_paths in train_loader:
             x = x.to(device, non_blocking=pin)
             y_norm = y_norm.to(device, non_blocking=pin)
@@ -269,11 +273,8 @@ def main():
             # stable should -> command (0,0) in normalized space:
             # target_norm = (0 - mean)/std = -mean/std
             # because y_norm = (y_cmd - mean)/std
-            mean = train_ds.global_stats.mean.to(device)
-            std = train_ds.global_stats.std.to(device)
-            zero_target = (-mean / std).unsqueeze(0).expand_as(pred)
-
             pred_stable = model(x_stable)
+            zero_target = zero_target_base.expand_as(pred_stable)
             loss_zero = criterion(pred_stable, zero_target)
 
             loss = loss_main + (ZERO_LOSS_W * loss_zero)

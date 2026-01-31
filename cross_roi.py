@@ -12,9 +12,9 @@ from PIL import Image
 
 @dataclass
 class RoiResult:
-    mask_hw: torch.Tensor        # [1,H,W] float32 in {0..1} (soft)
+    mask_hw: torch.Tensor          # [1,H,W] float32 in {bg_weight..1} (soft)
     quad_xy: Optional[np.ndarray]  # [4,2] float32 (TL,TR,BR,BL) in resized coords
-    score: float                 # higher = more confident
+    score: float                   # higher = more confident
 
 
 def _order_quad(pts: np.ndarray) -> np.ndarray:
@@ -29,6 +29,26 @@ def _order_quad(pts: np.ndarray) -> np.ndarray:
     return np.array([tl, tr, br, bl], dtype=np.float32)
 
 
+def _poly_mask(h: int, w: int, quad: np.ndarray) -> np.ndarray:
+    m = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillConvexPoly(m, quad.astype(np.int32), 255)
+    return m
+
+
+def _mean_hsv_in_poly(hsv: np.ndarray, quad: np.ndarray) -> Tuple[float, float, float]:
+    """Return mean (H,S,V) inside quad polygon."""
+    h, w = hsv.shape[:2]
+    pm = _poly_mask(h, w, quad)
+    ys, xs = np.where(pm > 0)
+    if len(xs) < 50:
+        return 0.0, 0.0, 0.0
+    roi = hsv[ys, xs, :]
+    Hm = float(np.mean(roi[:, 0]))
+    Sm = float(np.mean(roi[:, 1]))
+    Vm = float(np.mean(roi[:, 2]))
+    return Hm, Sm, Vm
+
+
 def _count_white_strokes_in_warp(warp_bgr: np.ndarray) -> int:
     """
     Heuristic validation: in the plate warp, white cross strokes produce
@@ -37,7 +57,7 @@ def _count_white_strokes_in_warp(warp_bgr: np.ndarray) -> int:
     gray = cv2.cvtColor(warp_bgr, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
 
-    # Robust to glare: adaptive threshold tends to still pull white strokes.
+    # Adaptive threshold can over-fire on glare, but we'll gate with other tests too.
     bw = cv2.adaptiveThreshold(
         gray, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -89,24 +109,30 @@ def _count_white_strokes_in_warp(warp_bgr: np.ndarray) -> int:
 
 def _detect_plate_quad(resized_bgr: np.ndarray) -> Tuple[Optional[np.ndarray], float]:
     """
-    Find the dark blue/black rectangle by color + rectangular contour + cross-stroke validation.
+    Find the dark blue/black rectangle by:
+      1) color mask -> candidates
+      2) rectangular contour check
+      3) HSV stats inside quad (dark + bluish)
+      4) center prior (plate is usually central)
+      5) cross-stroke validation in perspective warp
+
     Returns (quad_xy, score). quad ordered TL,TR,BR,BL.
     """
     h, w = resized_bgr.shape[:2]
     hsv = cv2.cvtColor(resized_bgr, cv2.COLOR_BGR2HSV)
-    H = hsv[:, :, 0]
-    S = hsv[:, :, 1]
-    V = hsv[:, :, 2]
+    Hc = hsv[:, :, 0]
+    Sc = hsv[:, :, 1]
+    Vc = hsv[:, :, 2]
 
     # --- Primary: blue-ish region (the plate) ---
-    blueish = ((H >= 75) & (H <= 155) & (S > 25) & (V < 235))
+    blueish = ((Hc >= 75) & (Hc <= 155) & (Sc > 25) & (Vc < 245))
 
     # --- Backup: very dark neutral (in case it goes nearly black) ---
-    dark_neutral = ((V < 55) & (S < 80))
+    dark_neutral = ((Vc < 60) & (Sc < 90))
 
     mask = (blueish | dark_neutral).astype(np.uint8) * 255
 
-    # Clean / connect the plate region
+    # Clean / connect
     mask = cv2.morphologyEx(
         mask, cv2.MORPH_CLOSE,
         cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
@@ -123,13 +149,16 @@ def _detect_plate_quad(resized_bgr: np.ndarray) -> Tuple[Optional[np.ndarray], f
     best_quad = None
     best_score = -1.0
 
+    img_cx, img_cy = 0.5 * w, 0.5 * h
+    img_diag = float(np.sqrt(w * w + h * h))
+
     for c in cnts:
         area = float(cv2.contourArea(c))
         if area < 0.002 * h * w:
             continue
 
         rect = cv2.minAreaRect(c)
-        (cx, cy), (rw, rh), ang = rect
+        (cx, cy), (rw, rh), _ang = rect
         if rw < 20 or rh < 20:
             continue
 
@@ -140,13 +169,34 @@ def _detect_plate_quad(resized_bgr: np.ndarray) -> Tuple[Optional[np.ndarray], f
         box = cv2.boxPoints(rect).astype(np.float32)
         quad = _order_quad(box)
 
-        # Warp candidate to check for cross strokes
+        # ---- HSV stats inside quad: must be "plate-like" (dark + some chroma) ----
+        Hm, Sm, Vm = _mean_hsv_in_poly(hsv, quad)
+
+        # Plate is dark: mean V should be relatively low.
+        # Allow looser bound for glare (Vm can rise), but not too bright.
+        if Vm > 165:
+            continue
+
+        # Plate is usually bluish-ish: saturation not zero and hue in broad blue range.
+        # If it's almost black (low S), allow it if it's very dark.
+        is_bluish = (75 <= Hm <= 155 and Sm >= 18)
+        is_blackish = (Sm < 18 and Vm < 95)
+        if not (is_bluish or is_blackish):
+            continue
+
+        # Fill ratio rejects messy blobs.
+        rect_area = float(rw * rh)
+        fill = area / (rect_area + 1e-6)
+        if fill < 0.35:
+            continue
+
+        # ---- Warp candidate to check for cross strokes ----
         out_w = int(max(rw, rh))
         out_h = int(min(rw, rh))
         if out_h > out_w:
             out_w, out_h = out_h, out_w
-        out_w = max(out_w, 60)
-        out_h = max(out_h, 40)
+        out_w = max(out_w, 80)
+        out_h = max(out_h, 50)
 
         dst = np.array([[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]], dtype=np.float32)
         M = cv2.getPerspectiveTransform(quad, dst)
@@ -154,12 +204,23 @@ def _detect_plate_quad(resized_bgr: np.ndarray) -> Tuple[Optional[np.ndarray], f
 
         stroke_count = _count_white_strokes_in_warp(warp)
 
-        # Fill ratio helps reject messy blobs
-        rect_area = float(rw * rh)
-        fill = area / (rect_area + 1e-6)
+        # Require at least a little evidence of crosses.
+        if stroke_count < 3:
+            continue
 
-        # Score: prioritize “cross evidence” heavily
-        score = (stroke_count * 1000.0) + (area * fill)
+        # ---- Center prior: tape edges tend to be near borders; plate is central-ish ----
+        d_center = float(np.sqrt((cx - img_cx) ** 2 + (cy - img_cy) ** 2))
+        center_score = 1.0 - (d_center / (0.55 * img_diag + 1e-6))  # ~1 near center, ~0 far
+        center_score = float(np.clip(center_score, 0.0, 1.0))
+
+        # Score: prioritize stroke evidence, then geometry + center + darkness
+        # (Vm lower is better)
+        score = (
+            stroke_count * 2000.0
+            + area * fill * 0.5
+            + center_score * 5000.0
+            + (165.0 - Vm) * 20.0
+        )
 
         if score > best_score:
             best_score = score
@@ -171,17 +232,17 @@ def _detect_plate_quad(resized_bgr: np.ndarray) -> Tuple[Optional[np.ndarray], f
 def build_cross_weight_mask(
     pil_rgb: Image.Image,
     out_hw: Tuple[int, int],
-    bg_weight: float = 0.15,     # how much context outside ROI remains
-    dilate_px: int = 6,          # grow ROI a bit to include plate border
-    blur_px: int = 11,           # soften edges to avoid hard cut artifacts
+    bg_weight: float = 0.15,
+    dilate_px: int = 6,
+    blur_px: int = 11,
 ) -> RoiResult:
     """
     Returns a soft mask [1,H,W] in [bg_weight..1].
-    If detection fails, returns near-uniform mask (all ones).
+    If detection fails, returns all-ones (no masking).
     """
     H_out, W_out = out_hw
 
-    # Resize first (keep compute stable + matches your net input)
+    # Resize first to match net input sizing.
     pil_rs = pil_rgb.resize((W_out, H_out), Image.BILINEAR)
     rgb = np.array(pil_rs, dtype=np.uint8)
     bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
@@ -189,7 +250,6 @@ def build_cross_weight_mask(
     quad, score = _detect_plate_quad(bgr)
 
     if quad is None:
-        # No confident detection -> don't destroy signal
         mask = torch.ones((1, H_out, W_out), dtype=torch.float32)
         return RoiResult(mask_hw=mask, quad_xy=None, score=-1.0)
 
@@ -204,14 +264,13 @@ def build_cross_weight_mask(
     soft = hard.astype(np.float32) / 255.0
 
     if blur_px and blur_px > 1:
-        # ensure odd
         if blur_px % 2 == 0:
             blur_px += 1
         soft = cv2.GaussianBlur(soft, (blur_px, blur_px), 0)
 
-    # Convert to weight map: background retains bg_weight
+    # Convert to weight map
     soft = bg_weight + (1.0 - bg_weight) * soft
-    soft_t = torch.from_numpy(soft).unsqueeze(0).float()  # [1,H,W]
+    soft_t = torch.from_numpy(soft).unsqueeze(0).float()
 
     return RoiResult(mask_hw=soft_t, quad_xy=quad, score=float(score))
 
@@ -232,11 +291,46 @@ def preprocess_with_cross_mask(
     bg_weight: float = 0.15,
 ) -> Tuple[torch.Tensor, RoiResult]:
     """
-    If x_tensor is provided (already resized/normalized), we just compute mask on PIL
-    and apply to x_tensor. Otherwise returns the mask only.
+    Compute ROI mask from PIL, and optionally apply it to x_tensor.
+    Returns (masked_tensor_or_mask, roi_result).
     """
     roi = build_cross_weight_mask(pil_rgb, out_hw=out_hw, bg_weight=bg_weight)
     if x_tensor is None:
         return roi.mask_hw, roi
     x2 = apply_cross_roi_weight(x_tensor, roi.mask_hw)
     return x2, roi
+
+
+def debug_overlay(img_pil: Image.Image, out_hw=(180, 320)) -> Image.Image:
+    """
+    Debug overlay: red = ROI, green polyline = detected quad.
+    """
+    img_rgb = np.array(img_pil.convert("RGB"))
+    H, W = out_hw
+
+    roi = build_cross_weight_mask(img_pil, out_hw=out_hw)
+
+    img_rs = cv2.resize(img_rgb, (W, H), interpolation=cv2.INTER_AREA)
+
+    m = roi.mask_hw.squeeze(0).numpy()
+    m_bin = (m > 0.5).astype(np.uint8)
+
+    overlay = img_rs.copy()
+    overlay[m_bin > 0] = (255, 0, 0)
+    out = cv2.addWeighted(img_rs, 0.80, overlay, 0.20, 0)
+
+    if roi.quad_xy is not None:
+        q = roi.quad_xy.astype(np.int32)
+        cv2.polylines(out, [q], isClosed=True, color=(0, 255, 0), thickness=2)
+        cv2.putText(
+            out,
+            f"score={roi.score:.0f}",
+            (q[0][0], max(0, q[0][1] - 5)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 255, 0),
+            1,
+            cv2.LINE_AA,
+        )
+
+    return Image.fromarray(out)

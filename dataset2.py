@@ -6,9 +6,9 @@ import torch
 from torch.utils.data import Dataset
 from PIL import Image
 import pandas as pd
+import torchvision.transforms as T
 
-# NEW: ROI preprocessor
-from cross_roi import preprocess_with_cross_mask, debug_overlay
+from cross_roi import build_cross_weight_mask, apply_cross_roi_weight, debug_overlay
 
 # NOTE: torchvision Resize expects (H, W)
 DEFAULT_IMG_SIZE_HW: Tuple[int, int] = (180, 320)  # (H, W)
@@ -23,11 +23,12 @@ class Stats:
 class LaserDatasetRef(Dataset):
     """
     Returns:
-      inp:    [C,H,W]  (C=3 for diff/single, C=6 for concat)
-      y_norm: [2]      normalized command label (baseline-subtracted)
-      seq:    str
-      y_cmd:  [2]      command label in real units (baseline-subtracted)
-      y_raw:  [2]      raw label from CSV (original)
+      inp:      [C,H,W]  (C=3 for diff/single, C=6 for concat)
+      y_norm:   [2]      normalized command label (baseline-subtracted)
+      seq:      str
+      y_cmd:    [2]      command label in real units (baseline-subtracted)
+      y_raw:    [2]      raw label from CSV (original)
+      img_path: str      path (for debugging/overlays)
     """
 
     def __init__(
@@ -47,8 +48,9 @@ class LaserDatasetRef(Dataset):
         # Stable cache:
         stable_pool: int = 3,               # how many stable frames to cache per seq
         # ROI emphasis:
-        roi_base: float = 0.20,             # keep some context
-        roi_strength: float = 0.80,         # emphasize cross region
+        use_cross_roi: bool = True,
+        roi_bg_weight: float = 0.20,        # background weight in [0..1], lower = stronger focus
+        roi_strength: float = 1.00,         # 1.0 = use mask as-is; >1 boosts ROI contrast slightly
     ):
         self.root = root
         self.seqs = list(seqs)
@@ -63,10 +65,36 @@ class LaserDatasetRef(Dataset):
         self.baseline_m = int(baseline_m)
         self.stable_pool = int(stable_pool)
 
-        self.roi_base = float(roi_base)
+        self.use_cross_roi = bool(use_cross_roi)
+        self.roi_bg_weight = float(roi_bg_weight)
         self.roi_strength = float(roi_strength)
 
-        # Cached reference tensors per sequence
+        # ---------------- transforms ----------------
+        base_tf = [
+            T.Resize(self.img_size_hw, interpolation=T.InterpolationMode.BILINEAR),
+            T.ToTensor(),  # [0,1]
+        ]
+
+        if augment:
+            # mild physically-meaningful augments
+            base_tf = [
+                T.Resize(self.img_size_hw, interpolation=T.InterpolationMode.BILINEAR),
+                T.ColorJitter(brightness=0.15, contrast=0.15),
+                T.RandomAffine(
+                    degrees=0.0,
+                    translate=(0.02, 0.02),
+                    interpolation=T.InterpolationMode.BILINEAR,
+                ),
+                T.ToTensor(),
+            ]
+
+        # normalize to [-1,1]
+        base_tf.append(T.Normalize(mean=[0.5, 0.5, 0.5],
+                                   std=[0.5, 0.5, 0.5]))
+        self.transform = T.Compose(base_tf)
+        # -------------------------------------------
+
+        # Cached reference tensors per sequence (normalized [-1,1], NO ROI baked in)
         self.ref_tensor_by_seq: Dict[str, torch.Tensor] = {}
 
         # Baseline per seq in REAL units (az, el)
@@ -95,7 +123,7 @@ class LaserDatasetRef(Dataset):
                 raise FileNotFoundError(f"Reference start image not found: {ref_path}")
 
             ref_img = Image.open(ref_path).convert("RGB")
-            self.ref_tensor_by_seq[seq] = self._img_to_tensor(ref_img)
+            self.ref_tensor_by_seq[seq] = self.transform(ref_img)
 
             df = pd.read_csv(csv_path)
             required = {"pic_number", "delta_azimuth", "delta_elevation"}
@@ -105,10 +133,10 @@ class LaserDatasetRef(Dataset):
             rows: List[Tuple[int, str, torch.Tensor]] = []
             for _, row in df.iterrows():
                 pic = int(row["pic_number"])
-                problem_path = os.path.join(seq_dir, f"{seq}_{pic} 1.tga")
+                img_path = os.path.join(seq_dir, f"{seq}_{pic} 1.tga")
 
-                if not os.path.exists(problem_path):
-                    msg = f"[WARN] Missing image, skipping: {problem_path}"
+                if not os.path.exists(img_path):
+                    msg = f"[WARN] Missing image, skipping: {img_path}"
                     if strict:
                         raise FileNotFoundError(msg)
                     print(msg)
@@ -117,9 +145,8 @@ class LaserDatasetRef(Dataset):
                 az = float(row["delta_azimuth"])
                 el = float(row["delta_elevation"])
                 y_raw = torch.tensor([az, el], dtype=torch.float32)
-                rows.append((pic, problem_path, y_raw))
+                rows.append((pic, img_path, y_raw))
 
-            # sort by pic for "first M" baseline and stable pool
             rows.sort(key=lambda x: x[0])
             per_seq_rows[seq] = rows
 
@@ -146,7 +173,6 @@ class LaserDatasetRef(Dataset):
                 raise ValueError(f"Unknown baseline_strategy: {self.baseline_strategy}")
 
         # ---------------- build cached stable inputs ----------------
-        # Use first `stable_pool` images in each seq (same "stable prefix" concept)
         for seq, rows in per_seq_rows.items():
             ref = self.ref_tensor_by_seq[seq]
             stable_list: List[torch.Tensor] = []
@@ -154,14 +180,24 @@ class LaserDatasetRef(Dataset):
             k = min(self.stable_pool, len(rows))
             for i in range(k):
                 _pic, img_path, _y_raw = rows[i]
-                img = Image.open(img_path).convert("RGB")
-                x = self._img_to_tensor(img)
-                inp = self._make_input(x, ref)
+                img_pil = Image.open(img_path).convert("RGB")
+
+                # x is normalized [-1,1]
+                x = self.transform(img_pil)
+
+                # Apply ROI mask computed from THIS stable frame to both x and ref
+                if self.use_cross_roi:
+                    w = self._roi_weight_from_pil(img_pil)  # [1,H,W] float
+                    x2 = apply_cross_roi_weight(x, w)
+                    ref2 = apply_cross_roi_weight(ref, w)
+                else:
+                    x2, ref2 = x, ref
+
+                inp = self._make_input(x2, ref2)
                 stable_list.append(inp)
 
-            # Fallback if sequence has no disturbed frames (rare)
             if len(stable_list) == 0:
-                # use ref itself as "stable" proxy
+                # fallback if no disturbed frames
                 if self.mode == "single":
                     stable_list = [ref]
                 elif self.mode == "concat":
@@ -174,7 +210,6 @@ class LaserDatasetRef(Dataset):
             self.stable_inputs_by_seq[seq] = stable_list
 
         # ---------------- global label stats on COMMAND ----------------
-        # y_cmd = y_raw - baseline(seq)
         y_cmd_all = []
         for _path, y_raw, seq, _pic in self.samples:
             y_cmd = y_raw - self.baseline_by_seq[seq]
@@ -189,23 +224,24 @@ class LaserDatasetRef(Dataset):
     def __len__(self):
         return len(self.samples)
 
-    # ---------------- ROI image preprocessing ----------------
-    def _img_to_tensor(self, img_pil: Image.Image) -> torch.Tensor:
+    def _roi_weight_from_pil(self, img_pil: Image.Image) -> torch.Tensor:
         """
-        Returns tensor [3,H,W] normalized to [-1,1],
-        but with a soft ROI emphasis around the detected cross cluster.
+        Returns [1,H,W] weight map in [roi_bg_weight..1], optionally sharpened by roi_strength.
         """
-        x01 = preprocess_with_cross_mask(
-            img_pil,
-            out_hw=self.img_size_hw,
-            base=self.roi_base,
-            strength=self.roi_strength,
-            return_mask=False,
-        )  # float [3,H,W] in [0,1]
+        rr = build_cross_weight_mask(img_pil, out_hw=self.img_size_hw, bg_weight=self.roi_bg_weight)
+        w = rr.mask_hw  # already in [bg..1]
 
-        # match previous T.Normalize(mean=.5,std=.5) => [-1,1]
-        x = (x01 - 0.5) / 0.5
-        return x
+        # Optional "strength": slightly increase contrast between ROI and bg
+        # Convert to raw mask in [0..1], apply gamma-like shaping, back to [bg..1]
+        if self.roi_strength != 1.0:
+            bg = self.roi_bg_weight
+            raw = (w - bg) / max(1e-6, (1.0 - bg))
+            raw = raw.clamp(0.0, 1.0)
+            # strength >1 boosts ROI; strength <1 softens it
+            raw = raw.pow(1.0 / max(1e-6, self.roi_strength))
+            w = bg + (1.0 - bg) * raw
+
+        return w
 
     def _make_input(self, x: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
         if self.mode == "single":
@@ -222,7 +258,6 @@ class LaserDatasetRef(Dataset):
         return (y_cmd - self.global_stats.mean) / self.global_stats.std
 
     def get_stable_input(self, seq: str, stable_idx: int = 0) -> torch.Tensor:
-        """Returns cached stable input tensor for given seq."""
         pool = self.stable_inputs_by_seq[seq]
         if len(pool) == 0:
             raise RuntimeError(f"No stable pool for seq={seq}")
@@ -232,29 +267,21 @@ class LaserDatasetRef(Dataset):
     def __getitem__(self, idx: int):
         img_path, y_raw, seq, _pic = self.samples[idx]
 
-        img = Image.open(img_path).convert("RGB")
-        x = self.transform(img)
+        img_pil = Image.open(img_path).convert("RGB")
+        x = self.transform(img_pil)          # [-1,1]
+        ref = self.ref_tensor_by_seq[seq]    # [-1,1]
 
-        ref = self.ref_tensor_by_seq[seq]
-
-        # --- ROI weight both x and ref using current frame mask ---
         if self.use_cross_roi:
-            x, _roi = preprocess_with_cross_mask(
-                img, out_hw=self.img_size_hw, x_tensor=x, bg_weight=self.roi_bg_weight
-            )
-            # apply same mask to ref for concat/diff consistency
-            ref, _ = preprocess_with_cross_mask(
-                img, out_hw=self.img_size_hw, x_tensor=ref, bg_weight=self.roi_bg_weight
-            )
+            w = self._roi_weight_from_pil(img_pil)
+            x = apply_cross_roi_weight(x, w)
+            ref = apply_cross_roi_weight(ref, w)
 
         inp = self._make_input(x, ref)
 
-        # COMMAND label (what you want to send to motors)
         y_cmd = y_raw - self.baseline_by_seq[seq]
         y_norm = self._norm_label(y_cmd)
 
         return inp, y_norm, seq, y_cmd, y_raw, img_path
-
 
 
 # ---------------- Debug helper ----------------
