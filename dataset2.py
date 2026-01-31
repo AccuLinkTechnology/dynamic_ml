@@ -6,8 +6,9 @@ import torch
 from torch.utils.data import Dataset
 from PIL import Image
 import pandas as pd
-import torchvision.transforms as T
 
+# NEW: ROI preprocessor
+from cross_roi import preprocess_with_cross_mask, debug_overlay
 
 # NOTE: torchvision Resize expects (H, W)
 DEFAULT_IMG_SIZE_HW: Tuple[int, int] = (180, 320)  # (H, W)
@@ -45,6 +46,9 @@ class LaserDatasetRef(Dataset):
         baseline_m: int = 10,               # use first M frames for baseline estimate
         # Stable cache:
         stable_pool: int = 3,               # how many stable frames to cache per seq
+        # ROI emphasis:
+        roi_base: float = 0.20,             # keep some context
+        roi_strength: float = 0.80,         # emphasize cross region
     ):
         self.root = root
         self.seqs = list(seqs)
@@ -59,33 +63,8 @@ class LaserDatasetRef(Dataset):
         self.baseline_m = int(baseline_m)
         self.stable_pool = int(stable_pool)
 
-        # ---------------- transforms ----------------
-        base_tf = [
-            T.Resize(self.img_size_hw, interpolation=T.InterpolationMode.BILINEAR),
-            T.ToTensor(),
-        ]
-
-        if augment:
-            # mild physical-meaningful augments (safe defaults)
-            base_tf = [
-                T.Resize(self.img_size_hw, interpolation=T.InterpolationMode.BILINEAR),
-                T.ColorJitter(brightness=0.15, contrast=0.15),
-                # small translations mimic camera pose drift a bit
-                T.RandomAffine(
-                    degrees=0.0,
-                    translate=(0.02, 0.02),  # 2% shift
-                    scale=None,
-                    shear=None,
-                    interpolation=T.InterpolationMode.BILINEAR,
-                ),
-                T.ToTensor(),
-            ]
-
-        # normalize to [-1,1]
-        base_tf.append(T.Normalize(mean=[0.5, 0.5, 0.5],
-                                   std=[0.5, 0.5, 0.5]))
-        self.transform = T.Compose(base_tf)
-        # -------------------------------------------
+        self.roi_base = float(roi_base)
+        self.roi_strength = float(roi_strength)
 
         # Cached reference tensors per sequence
         self.ref_tensor_by_seq: Dict[str, torch.Tensor] = {}
@@ -116,7 +95,7 @@ class LaserDatasetRef(Dataset):
                 raise FileNotFoundError(f"Reference start image not found: {ref_path}")
 
             ref_img = Image.open(ref_path).convert("RGB")
-            self.ref_tensor_by_seq[seq] = self.transform(ref_img)
+            self.ref_tensor_by_seq[seq] = self._img_to_tensor(ref_img)
 
             df = pd.read_csv(csv_path)
             required = {"pic_number", "delta_azimuth", "delta_elevation"}
@@ -176,7 +155,7 @@ class LaserDatasetRef(Dataset):
             for i in range(k):
                 _pic, img_path, _y_raw = rows[i]
                 img = Image.open(img_path).convert("RGB")
-                x = self.transform(img)
+                x = self._img_to_tensor(img)
                 inp = self._make_input(x, ref)
                 stable_list.append(inp)
 
@@ -210,6 +189,24 @@ class LaserDatasetRef(Dataset):
     def __len__(self):
         return len(self.samples)
 
+    # ---------------- ROI image preprocessing ----------------
+    def _img_to_tensor(self, img_pil: Image.Image) -> torch.Tensor:
+        """
+        Returns tensor [3,H,W] normalized to [-1,1],
+        but with a soft ROI emphasis around the detected cross cluster.
+        """
+        x01 = preprocess_with_cross_mask(
+            img_pil,
+            out_hw=self.img_size_hw,
+            base=self.roi_base,
+            strength=self.roi_strength,
+            return_mask=False,
+        )  # float [3,H,W] in [0,1]
+
+        # match previous T.Normalize(mean=.5,std=.5) => [-1,1]
+        x = (x01 - 0.5) / 0.5
+        return x
+
     def _make_input(self, x: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
         if self.mode == "single":
             return x
@@ -236,7 +233,7 @@ class LaserDatasetRef(Dataset):
         img_path, y_raw, seq, _pic = self.samples[idx]
 
         img = Image.open(img_path).convert("RGB")
-        x = self.transform(img)
+        x = self._img_to_tensor(img)
 
         ref = self.ref_tensor_by_seq[seq]
         inp = self._make_input(x, ref)
@@ -246,3 +243,18 @@ class LaserDatasetRef(Dataset):
         y_norm = self._norm_label(y_cmd)
 
         return inp, y_norm, seq, y_cmd, y_raw
+
+
+# ---------------- Debug helper ----------------
+if __name__ == "__main__":
+    # Example:
+    # python3 dataset2.py /workspace/dynamic_ml/train2/seq2/seq2_0\ 1.tga
+    import sys
+    if len(sys.argv) >= 2:
+        p = sys.argv[1]
+        img = Image.open(p).convert("RGB")
+        out = debug_overlay(img, out_hw=DEFAULT_IMG_SIZE_HW)
+        out.save("cross_debug_overlay.png")
+        print("wrote cross_debug_overlay.png")
+    else:
+        print("usage: python3 dataset2.py /path/to/frame.tga")

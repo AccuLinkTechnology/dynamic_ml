@@ -1,127 +1,199 @@
 # cross_roi.py
-# Minimal "math/CV" to bias the model toward the cross pattern:
-# - build a soft mask from bright pixels (white lines) on dark background
-# - multiply image tensors by that mask before normalization / model
-
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Optional, Tuple
+
 import numpy as np
-import cv2
 import torch
+
+# OpenCV is best here (fast, robust)
+import cv2
 from PIL import Image
 
 
-def build_cross_soft_mask_bgr(
-    bgr: np.ndarray,
-    out_size: tuple[int, int] = (320, 180),
-    *,
-    percentile: float = 97.0,
-    thr_floor: float = 0.60,
-    thr_scale: float = 0.80,
-    min_area_frac: float = 0.0008,
-    close_ksize: int = 3,
-    dilate_ksize: int = 5,
-    blur_sigma: float = 3.0,
-) -> np.ndarray:
+@dataclass
+class CrossRoiConfig:
+    out_hw: Tuple[int, int] = (180, 320)  # (H,W)
+    # soft attention: out = img * (base + strength*mask)
+    base: float = 0.20
+    strength: float = 0.80
+
+    # card detection constraints
+    card_area_min_frac: float = 0.01
+    card_area_max_frac: float = 0.50
+    card_aspect_min: float = 1.2
+    card_aspect_max: float = 3.0
+
+    # edge detection for card
+    canny_lo: int = 40
+    canny_hi: int = 120
+
+    # cross threshold (within card ROI)
+    cross_v_percentile: float = 92.0
+    cross_v_clip_min: int = 80
+    cross_v_clip_max: int = 220
+
+    # component filtering (within card)
+    comp_area_min_frac_of_full: float = 0.0003
+    comp_area_max_frac_of_roi: float = 0.15
+
+    # mask thickening
+    dilate_kernel: int = 5
+
+
+def _find_card_bbox(rgb: np.ndarray, cfg: CrossRoiConfig) -> Tuple[int, int, int, int]:
     """
-    Returns float32 mask in [0,1] shape (H,W) where cross-like bright structures get higher weight.
-    This intentionally avoids fragile Hough-line logic; it's robust and minimal.
-
-    out_size is (W,H) to match your IMG_SIZE=(180,320) -> (H,W).
+    Find a near-center quadrilateral (the dark-blue card) via edges/contours.
+    Returns (x,y,w,h) in resized image coordinates.
     """
-    out_w, out_h = out_size
-    img = cv2.resize(bgr, (out_w, out_h), interpolation=cv2.INTER_AREA)
+    H, W = cfg.out_hw
+    img = cv2.resize(rgb, (W, H), interpolation=cv2.INTER_AREA)
 
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    v = hsv[:, :, 2].astype(np.float32) / 255.0
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
 
-    # adaptive threshold based on bright tail, but never below thr_floor
-    thr = max(thr_floor, float(np.percentile(v, percentile)) * thr_scale)
-    bin_ = (v > thr).astype(np.uint8)
+    edges = cv2.Canny(gray, cfg.canny_lo, cfg.canny_hi)
+    edges = cv2.dilate(edges, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)), iterations=1)
 
-    # remove tiny bright speckles (glints/compression noise)
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(bin_, connectivity=8)
-    keep = np.zeros_like(bin_, dtype=np.uint8)
-    min_area = int(min_area_frac * out_w * out_h)
+    cnts, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    for i in range(1, n):
-        area = int(stats[i, cv2.CC_STAT_AREA])
-        if area >= min_area:
-            keep[labels == i] = 1
+    best = None
+    best_score = 0.0
+    full_area = float(H * W)
 
-    keep = (keep * 255).astype(np.uint8)
+    for c in cnts:
+        area = float(cv2.contourArea(c))
+        if area < cfg.card_area_min_frac * full_area or area > cfg.card_area_max_frac * full_area:
+            continue
 
-    # connect broken line segments and widen slightly so gradients survive downsampling
-    if close_ksize > 1:
-        keep = cv2.morphologyEx(
-            keep,
-            cv2.MORPH_CLOSE,
-            np.ones((close_ksize, close_ksize), np.uint8),
-            iterations=1,
-        )
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+        if len(approx) != 4:
+            continue
 
-    if dilate_ksize > 1:
-        keep = cv2.dilate(keep, np.ones((dilate_ksize, dilate_ksize), np.uint8), iterations=1)
+        x, y, w, h = cv2.boundingRect(approx)
+        ar = w / float(h + 1e-6)
+        if ar < cfg.card_aspect_min or ar > cfg.card_aspect_max:
+            continue
 
-    # blur -> soft attention rather than hard cutoff
-    if blur_sigma > 0:
-        keep = cv2.GaussianBlur(keep, (0, 0), sigmaX=blur_sigma)
+        cx = x + 0.5 * w
+        cy = y + 0.5 * h
+        center_dist = ((cx - W / 2) ** 2 + (cy - H / 2) ** 2) ** 0.5
 
-    mask = keep.astype(np.float32) / 255.0
-    if mask.max() > 1e-6:
-        mask /= mask.max()
-    return mask
+        # prefer large + near center
+        score = area / (1.0 + center_dist)
+        if score > best_score:
+            best_score = score
+            best = (x, y, w, h)
+
+    if best is None:
+        # fallback: central box
+        w = int(0.55 * W)
+        h = int(0.35 * H)
+        x = (W - w) // 2
+        y = (H - h) // 2
+        best = (x, y, w, h)
+
+    return best
 
 
-def pil_to_bgr(pil_img: Image.Image) -> np.ndarray:
-    rgb = np.array(pil_img.convert("RGB"))
-    return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+def _cross_mask_uint8(rgb: np.ndarray, cfg: CrossRoiConfig) -> np.ndarray:
+    """
+    Returns uint8 mask (H,W) values {0,255} in resized coordinates.
+    """
+    H, W = cfg.out_hw
+    img = cv2.resize(rgb, (W, H), interpolation=cv2.INTER_AREA)
+
+    x, y, w, h = _find_card_bbox(rgb, cfg)
+    roi = img[y : y + h, x : x + w]
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
+    _, s, v = cv2.split(hsv)
+
+    v_blur = cv2.GaussianBlur(v, (5, 5), 0)
+    thr_v = int(np.clip(np.percentile(v_blur, cfg.cross_v_percentile), cfg.cross_v_clip_min, cfg.cross_v_clip_max))
+
+    # inside the card, don't rely on saturation (lighting changes)
+    mask = (v_blur >= thr_v).astype(np.uint8) * 255
+
+    k = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k, iterations=1)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k, iterations=1)
+
+    # filter connected components to remove huge blobs and tiny noise
+    num, lab, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    keep = np.zeros_like(mask)
+
+    full_area = float(H * W)
+    area_min = cfg.comp_area_min_frac_of_full * full_area
+    area_max = cfg.comp_area_max_frac_of_roi * float(w * h)
+
+    for i in range(1, num):
+        area = float(stats[i, cv2.CC_STAT_AREA])
+        if area_min <= area <= area_max:
+            keep[lab == i] = 255
+
+    d = cfg.dilate_kernel
+    keep = cv2.dilate(keep, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (d, d)), iterations=1)
+
+    full = np.zeros((H, W), dtype=np.uint8)
+    full[y : y + h, x : x + w] = keep
+    return full
 
 
 def preprocess_with_cross_mask(
-    pil_img: Image.Image,
-    out_hw: tuple[int, int],
-    mean: tuple[float, float, float],
-    std: tuple[float, float, float],
-) -> torch.Tensor:
+    img_pil: Image.Image,
+    out_hw: Tuple[int, int] = (180, 320),
+    base: float = 0.20,
+    strength: float = 0.80,
+    return_mask: bool = False,
+) -> torch.Tensor | Tuple[torch.Tensor, torch.Tensor]:
     """
-    Returns torch float tensor (3,H,W) normalized, after applying the cross soft mask.
+    Drop-in preprocessor:
+      - resizes
+      - finds cross ROI mask
+      - applies soft attention to RGB
+      - returns torch float tensor (C,H,W) in [0,1]
 
-    out_hw is (H,W) like your IMG_SIZE=(180,320).
-    mean/std are for your image normalization (whatever you're using now).
+    Output is compatible with your existing model (still 3ch per frame).
     """
+    cfg = CrossRoiConfig(out_hw=out_hw, base=base, strength=strength)
+
+    img_rgb = np.array(img_pil.convert("RGB"))
     H, W = out_hw
-    bgr = pil_to_bgr(pil_img)
-    mask = build_cross_soft_mask_bgr(bgr, out_size=(W, H))  # (H,W) float32 [0,1]
+
+    # compute mask (uint8 0/255) and normalize to 0..1
+    m_u8 = _cross_mask_uint8(img_rgb, cfg)
+    m = (m_u8.astype(np.float32) / 255.0)  # (H,W)
 
     # resize image to match
-    bgr_rs = cv2.resize(bgr, (W, H), interpolation=cv2.INTER_AREA)
-    rgb = cv2.cvtColor(bgr_rs, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0  # (H,W,3)
+    img_rs = cv2.resize(img_rgb, (W, H), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0  # (H,W,3)
 
-    # apply mask (broadcast over channels)
-    rgb *= mask[:, :, None]
+    # soft attention
+    alpha = np.clip(cfg.base + cfg.strength * m, 0.0, 1.0).astype(np.float32)  # (H,W)
+    img_att = img_rs * alpha[..., None]  # (H,W,3)
 
-    # to torch (3,H,W)
-    x = torch.from_numpy(rgb).permute(2, 0, 1).contiguous()
+    x = torch.from_numpy(img_att).permute(2, 0, 1).contiguous()  # (3,H,W)
 
-    # normalize
-    mean_t = torch.tensor(mean, dtype=x.dtype).view(3, 1, 1)
-    std_t = torch.tensor(std, dtype=x.dtype).view(3, 1, 1)
-    x = (x - mean_t) / std_t
+    if return_mask:
+        m_t = torch.from_numpy(m).unsqueeze(0).contiguous()  # (1,H,W)
+        return x, m_t
     return x
 
 
-def debug_overlay(
-    pil_img: Image.Image,
-    out_path: str,
-    out_hw: tuple[int, int] = (180, 320),
-) -> None:
-    """Writes an overlay image so you can sanity-check what the mask is selecting."""
+def debug_overlay(img_pil: Image.Image, out_hw=(180, 320)) -> Image.Image:
+    """
+    Handy: returns an RGB PIL image with mask overlayed in red.
+    """
+    img_rgb = np.array(img_pil.convert("RGB"))
+    cfg = CrossRoiConfig(out_hw=out_hw)
     H, W = out_hw
-    bgr = pil_to_bgr(pil_img)
-    mask = build_cross_soft_mask_bgr(bgr, out_size=(W, H))
-    img = cv2.resize(bgr, (W, H), interpolation=cv2.INTER_AREA)
 
-    heat = cv2.applyColorMap((mask * 255).astype(np.uint8), cv2.COLORMAP_JET)
-    overlay = cv2.addWeighted(img, 0.7, heat, 0.3, 0.0)
-    cv2.imwrite(out_path, overlay)
+    m_u8 = _cross_mask_uint8(img_rgb, cfg)
+    img_rs = cv2.resize(img_rgb, (W, H), interpolation=cv2.INTER_AREA)
+
+    overlay = img_rs.copy()
+    overlay[m_u8 > 0] = (255, 0, 0)  # red highlight
+    out = cv2.addWeighted(img_rs, 0.80, overlay, 0.20, 0)
+    return Image.fromarray(out)
