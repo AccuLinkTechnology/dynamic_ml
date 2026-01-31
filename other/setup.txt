@@ -46,10 +46,10 @@ if isinstance(seq, dict):
             print(k, "mean:", v.tolist())
 PY
 
-python - << 'EOF'
+python3 - << 'EOF'
 import torch
 
-stats = torch.load("runs_ref/<RUN_DIR_NAME>/label_stats.pt", map_location="cpu")
+stats = torch.load("runs_ref/20260131_191834_ref/label_stats.pt", map_location="cpu")
 print("TRAIN_SEQS:", stats["train_seqs"])
 print("VAL_SEQS:", stats["val_seqs"])
 print("MODE:", stats["mode"])
