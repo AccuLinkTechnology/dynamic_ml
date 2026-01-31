@@ -5,195 +5,238 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 
 import numpy as np
-import torch
-
-# OpenCV is best here (fast, robust)
 import cv2
+import torch
 from PIL import Image
 
 
 @dataclass
-class CrossRoiConfig:
-    out_hw: Tuple[int, int] = (180, 320)  # (H,W)
-    # soft attention: out = img * (base + strength*mask)
-    base: float = 0.20
-    strength: float = 0.80
-
-    # card detection constraints
-    card_area_min_frac: float = 0.01
-    card_area_max_frac: float = 0.50
-    card_aspect_min: float = 1.2
-    card_aspect_max: float = 3.0
-
-    # edge detection for card
-    canny_lo: int = 40
-    canny_hi: int = 120
-
-    # cross threshold (within card ROI)
-    cross_v_percentile: float = 92.0
-    cross_v_clip_min: int = 80
-    cross_v_clip_max: int = 220
-
-    # component filtering (within card)
-    comp_area_min_frac_of_full: float = 0.0003
-    comp_area_max_frac_of_roi: float = 0.15
-
-    # mask thickening
-    dilate_kernel: int = 5
+class RoiResult:
+    mask_hw: torch.Tensor        # [1,H,W] float32 in {0..1} (soft)
+    quad_xy: Optional[np.ndarray]  # [4,2] float32 (TL,TR,BR,BL) in resized coords
+    score: float                 # higher = more confident
 
 
-def _find_card_bbox(rgb: np.ndarray, cfg: CrossRoiConfig) -> Tuple[int, int, int, int]:
+def _order_quad(pts: np.ndarray) -> np.ndarray:
+    """Order 4 points TL,TR,BR,BL."""
+    pts = pts.astype(np.float32)
+    s = pts.sum(axis=1)
+    d = np.diff(pts, axis=1)[:, 0]
+    tl = pts[np.argmin(s)]
+    br = pts[np.argmax(s)]
+    tr = pts[np.argmin(d)]
+    bl = pts[np.argmax(d)]
+    return np.array([tl, tr, br, bl], dtype=np.float32)
+
+
+def _count_white_strokes_in_warp(warp_bgr: np.ndarray) -> int:
     """
-    Find a near-center quadrilateral (the dark-blue card) via edges/contours.
-    Returns (x,y,w,h) in resized image coordinates.
+    Heuristic validation: in the plate warp, white cross strokes produce
+    multiple thin/high-perimeter components. Count candidates.
     """
-    H, W = cfg.out_hw
-    img = cv2.resize(rgb, (W, H), interpolation=cv2.INTER_AREA)
-
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    gray = cv2.cvtColor(warp_bgr, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
 
-    edges = cv2.Canny(gray, cfg.canny_lo, cfg.canny_hi)
-    edges = cv2.dilate(edges, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)), iterations=1)
+    # Robust to glare: adaptive threshold tends to still pull white strokes.
+    bw = cv2.adaptiveThreshold(
+        gray, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        31, -5
+    )
 
-    cnts, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    bw = cv2.morphologyEx(
+        bw, cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)),
+        iterations=1
+    )
 
-    best = None
-    best_score = 0.0
-    full_area = float(H * W)
+    num, labels, stats, _centroids = cv2.connectedComponentsWithStats(bw, connectivity=8)
+    H, W = gray.shape[:2]
+    cands = 0
+
+    for i in range(1, num):
+        x, y, ww, hh, aa = stats[i]
+
+        # size gate
+        if aa < 25 or aa > 0.15 * H * W:
+            continue
+
+        ar = ww / (hh + 1e-6)
+        if ar < 0.25 or ar > 4.0:
+            continue
+
+        comp = (labels == i).astype(np.uint8) * 255
+        cnts, _ = cv2.findContours(comp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            continue
+
+        c = cnts[0]
+        area = float(cv2.contourArea(c))
+        if area <= 1e-6:
+            continue
+        per = float(cv2.arcLength(c, True))
+
+        # perimeter^2 / area: blobs small, stroke-like higher
+        compact = (per * per) / (4.0 * np.pi * area + 1e-6)
+        if compact < 2.0 or compact > 60.0:
+            continue
+
+        cands += 1
+
+    return cands
+
+
+def _detect_plate_quad(resized_bgr: np.ndarray) -> Tuple[Optional[np.ndarray], float]:
+    """
+    Find the dark blue/black rectangle by color + rectangular contour + cross-stroke validation.
+    Returns (quad_xy, score). quad ordered TL,TR,BR,BL.
+    """
+    h, w = resized_bgr.shape[:2]
+    hsv = cv2.cvtColor(resized_bgr, cv2.COLOR_BGR2HSV)
+    H = hsv[:, :, 0]
+    S = hsv[:, :, 1]
+    V = hsv[:, :, 2]
+
+    # --- Primary: blue-ish region (the plate) ---
+    blueish = ((H >= 75) & (H <= 155) & (S > 25) & (V < 235))
+
+    # --- Backup: very dark neutral (in case it goes nearly black) ---
+    dark_neutral = ((V < 55) & (S < 80))
+
+    mask = (blueish | dark_neutral).astype(np.uint8) * 255
+
+    # Clean / connect the plate region
+    mask = cv2.morphologyEx(
+        mask, cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
+        iterations=2
+    )
+    mask = cv2.morphologyEx(
+        mask, cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
+        iterations=1
+    )
+
+    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    best_quad = None
+    best_score = -1.0
 
     for c in cnts:
         area = float(cv2.contourArea(c))
-        if area < cfg.card_area_min_frac * full_area or area > cfg.card_area_max_frac * full_area:
+        if area < 0.002 * h * w:
             continue
 
-        peri = cv2.arcLength(c, True)
-        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-        if len(approx) != 4:
+        rect = cv2.minAreaRect(c)
+        (cx, cy), (rw, rh), ang = rect
+        if rw < 20 or rh < 20:
             continue
 
-        x, y, w, h = cv2.boundingRect(approx)
-        ar = w / float(h + 1e-6)
-        if ar < cfg.card_aspect_min or ar > cfg.card_aspect_max:
+        ar = max(rw, rh) / (min(rw, rh) + 1e-6)
+        if ar < 1.15 or ar > 6.0:
             continue
 
-        cx = x + 0.5 * w
-        cy = y + 0.5 * h
-        center_dist = ((cx - W / 2) ** 2 + (cy - H / 2) ** 2) ** 0.5
+        box = cv2.boxPoints(rect).astype(np.float32)
+        quad = _order_quad(box)
 
-        # prefer large + near center
-        score = area / (1.0 + center_dist)
+        # Warp candidate to check for cross strokes
+        out_w = int(max(rw, rh))
+        out_h = int(min(rw, rh))
+        if out_h > out_w:
+            out_w, out_h = out_h, out_w
+        out_w = max(out_w, 60)
+        out_h = max(out_h, 40)
+
+        dst = np.array([[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]], dtype=np.float32)
+        M = cv2.getPerspectiveTransform(quad, dst)
+        warp = cv2.warpPerspective(resized_bgr, M, (out_w, out_h))
+
+        stroke_count = _count_white_strokes_in_warp(warp)
+
+        # Fill ratio helps reject messy blobs
+        rect_area = float(rw * rh)
+        fill = area / (rect_area + 1e-6)
+
+        # Score: prioritize “cross evidence” heavily
+        score = (stroke_count * 1000.0) + (area * fill)
+
         if score > best_score:
             best_score = score
-            best = (x, y, w, h)
+            best_quad = quad
 
-    if best is None:
-        # fallback: central box
-        w = int(0.55 * W)
-        h = int(0.35 * H)
-        x = (W - w) // 2
-        y = (H - h) // 2
-        best = (x, y, w, h)
-
-    return best
+    return best_quad, best_score
 
 
-def _cross_mask_uint8(rgb: np.ndarray, cfg: CrossRoiConfig) -> np.ndarray:
+def build_cross_weight_mask(
+    pil_rgb: Image.Image,
+    out_hw: Tuple[int, int],
+    bg_weight: float = 0.15,     # how much context outside ROI remains
+    dilate_px: int = 6,          # grow ROI a bit to include plate border
+    blur_px: int = 11,           # soften edges to avoid hard cut artifacts
+) -> RoiResult:
     """
-    Returns uint8 mask (H,W) values {0,255} in resized coordinates.
+    Returns a soft mask [1,H,W] in [bg_weight..1].
+    If detection fails, returns near-uniform mask (all ones).
     """
-    H, W = cfg.out_hw
-    img = cv2.resize(rgb, (W, H), interpolation=cv2.INTER_AREA)
+    H_out, W_out = out_hw
 
-    x, y, w, h = _find_card_bbox(rgb, cfg)
-    roi = img[y : y + h, x : x + w]
+    # Resize first (keep compute stable + matches your net input)
+    pil_rs = pil_rgb.resize((W_out, H_out), Image.BILINEAR)
+    rgb = np.array(pil_rs, dtype=np.uint8)
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
-    hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
-    _, s, v = cv2.split(hsv)
+    quad, score = _detect_plate_quad(bgr)
 
-    v_blur = cv2.GaussianBlur(v, (5, 5), 0)
-    thr_v = int(np.clip(np.percentile(v_blur, cfg.cross_v_percentile), cfg.cross_v_clip_min, cfg.cross_v_clip_max))
+    if quad is None:
+        # No confident detection -> don't destroy signal
+        mask = torch.ones((1, H_out, W_out), dtype=torch.float32)
+        return RoiResult(mask_hw=mask, quad_xy=None, score=-1.0)
 
-    # inside the card, don't rely on saturation (lighting changes)
-    mask = (v_blur >= thr_v).astype(np.uint8) * 255
+    # Hard mask from quad
+    hard = np.zeros((H_out, W_out), dtype=np.uint8)
+    cv2.fillConvexPoly(hard, quad.astype(np.int32), 255)
 
-    k = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k, iterations=1)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k, iterations=1)
+    if dilate_px > 0:
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * dilate_px + 1, 2 * dilate_px + 1))
+        hard = cv2.dilate(hard, k, iterations=1)
 
-    # filter connected components to remove huge blobs and tiny noise
-    num, lab, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    keep = np.zeros_like(mask)
+    soft = hard.astype(np.float32) / 255.0
 
-    full_area = float(H * W)
-    area_min = cfg.comp_area_min_frac_of_full * full_area
-    area_max = cfg.comp_area_max_frac_of_roi * float(w * h)
+    if blur_px and blur_px > 1:
+        # ensure odd
+        if blur_px % 2 == 0:
+            blur_px += 1
+        soft = cv2.GaussianBlur(soft, (blur_px, blur_px), 0)
 
-    for i in range(1, num):
-        area = float(stats[i, cv2.CC_STAT_AREA])
-        if area_min <= area <= area_max:
-            keep[lab == i] = 255
+    # Convert to weight map: background retains bg_weight
+    soft = bg_weight + (1.0 - bg_weight) * soft
+    soft_t = torch.from_numpy(soft).unsqueeze(0).float()  # [1,H,W]
 
-    d = cfg.dilate_kernel
-    keep = cv2.dilate(keep, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (d, d)), iterations=1)
+    return RoiResult(mask_hw=soft_t, quad_xy=quad, score=float(score))
 
-    full = np.zeros((H, W), dtype=np.uint8)
-    full[y : y + h, x : x + w] = keep
-    return full
+
+def apply_cross_roi_weight(x_chw: torch.Tensor, w_1hw: torch.Tensor) -> torch.Tensor:
+    """
+    Multiply an image tensor [3,H,W] or [6,H,W] by weight map [1,H,W].
+    """
+    if w_1hw.dtype != x_chw.dtype:
+        w_1hw = w_1hw.to(dtype=x_chw.dtype)
+    return x_chw * w_1hw
 
 
 def preprocess_with_cross_mask(
-    img_pil: Image.Image,
-    out_hw: Tuple[int, int] = (180, 320),
-    base: float = 0.20,
-    strength: float = 0.80,
-    return_mask: bool = False,
-) -> torch.Tensor | Tuple[torch.Tensor, torch.Tensor]:
+    pil_rgb: Image.Image,
+    out_hw: Tuple[int, int],
+    x_tensor: Optional[torch.Tensor] = None,
+    bg_weight: float = 0.15,
+) -> Tuple[torch.Tensor, RoiResult]:
     """
-    Drop-in preprocessor:
-      - resizes
-      - finds cross ROI mask
-      - applies soft attention to RGB
-      - returns torch float tensor (C,H,W) in [0,1]
-
-    Output is compatible with your existing model (still 3ch per frame).
+    If x_tensor is provided (already resized/normalized), we just compute mask on PIL
+    and apply to x_tensor. Otherwise returns the mask only.
     """
-    cfg = CrossRoiConfig(out_hw=out_hw, base=base, strength=strength)
-
-    img_rgb = np.array(img_pil.convert("RGB"))
-    H, W = out_hw
-
-    # compute mask (uint8 0/255) and normalize to 0..1
-    m_u8 = _cross_mask_uint8(img_rgb, cfg)
-    m = (m_u8.astype(np.float32) / 255.0)  # (H,W)
-
-    # resize image to match
-    img_rs = cv2.resize(img_rgb, (W, H), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0  # (H,W,3)
-
-    # soft attention
-    alpha = np.clip(cfg.base + cfg.strength * m, 0.0, 1.0).astype(np.float32)  # (H,W)
-    img_att = img_rs * alpha[..., None]  # (H,W,3)
-
-    x = torch.from_numpy(img_att).permute(2, 0, 1).contiguous()  # (3,H,W)
-
-    if return_mask:
-        m_t = torch.from_numpy(m).unsqueeze(0).contiguous()  # (1,H,W)
-        return x, m_t
-    return x
-
-
-def debug_overlay(img_pil: Image.Image, out_hw=(180, 320)) -> Image.Image:
-    """
-    Handy: returns an RGB PIL image with mask overlayed in red.
-    """
-    img_rgb = np.array(img_pil.convert("RGB"))
-    cfg = CrossRoiConfig(out_hw=out_hw)
-    H, W = out_hw
-
-    m_u8 = _cross_mask_uint8(img_rgb, cfg)
-    img_rs = cv2.resize(img_rgb, (W, H), interpolation=cv2.INTER_AREA)
-
-    overlay = img_rs.copy()
-    overlay[m_u8 > 0] = (255, 0, 0)  # red highlight
-    out = cv2.addWeighted(img_rs, 0.80, overlay, 0.20, 0)
-    return Image.fromarray(out)
+    roi = build_cross_weight_mask(pil_rgb, out_hw=out_hw, bg_weight=bg_weight)
+    if x_tensor is None:
+        return roi.mask_hw, roi
+    x2 = apply_cross_roi_weight(x_tensor, roi.mask_hw)
+    return x2, roi

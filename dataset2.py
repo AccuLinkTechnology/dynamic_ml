@@ -233,16 +233,28 @@ class LaserDatasetRef(Dataset):
         img_path, y_raw, seq, _pic = self.samples[idx]
 
         img = Image.open(img_path).convert("RGB")
-        x = self._img_to_tensor(img)
+        x = self.transform(img)
 
         ref = self.ref_tensor_by_seq[seq]
+
+        # --- ROI weight both x and ref using current frame mask ---
+        if self.use_cross_roi:
+            x, _roi = preprocess_with_cross_mask(
+                img, out_hw=self.img_size_hw, x_tensor=x, bg_weight=self.roi_bg_weight
+            )
+            # apply same mask to ref for concat/diff consistency
+            ref, _ = preprocess_with_cross_mask(
+                img, out_hw=self.img_size_hw, x_tensor=ref, bg_weight=self.roi_bg_weight
+            )
+
         inp = self._make_input(x, ref)
 
         # COMMAND label (what you want to send to motors)
         y_cmd = y_raw - self.baseline_by_seq[seq]
         y_norm = self._norm_label(y_cmd)
 
-        return inp, y_norm, seq, y_cmd, y_raw
+        return inp, y_norm, seq, y_cmd, y_raw, img_path
+
 
 
 # ---------------- Debug helper ----------------

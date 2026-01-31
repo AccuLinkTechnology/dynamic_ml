@@ -10,6 +10,9 @@ from torch.utils.data import DataLoader, Sampler
 
 from dataset2 import LaserDatasetRef, DEFAULT_IMG_SIZE_HW
 from model import LaserNet
+from cross_roi import debug_overlay
+from PIL import Image
+
 
 
 def pick_data_root() -> str:
@@ -68,6 +71,8 @@ SEED = 123
 RUN_DIR = os.path.join("runs_ref", time.strftime("%Y%m%d_%H%M%S_ref"))
 os.makedirs(RUN_DIR, exist_ok=True)
 
+DEBUG_DIR = os.path.join(RUN_DIR, "debug_roi")
+os.makedirs(DEBUG_DIR, exist_ok=True)
 
 def save_label_stats(ds: LaserDatasetRef, path: str):
     payload = {
@@ -234,7 +239,7 @@ def main():
         train_loss_sum = 0.0
         n_train = 0
 
-        for x, y_norm, seqs, y_cmd, _y_raw in train_loader:
+        for x, y_norm, seqs, y_cmd, _y_raw, img_paths in train_loader:
             x = x.to(device, non_blocking=pin)
             y_norm = y_norm.to(device, non_blocking=pin)
 
@@ -243,6 +248,18 @@ def main():
                 [train_ds.get_stable_input(s, stable_idx=ZERO_STABLE_IDX) for s in seqs],
                 dim=0,
             ).to(device, non_blocking=pin)
+
+            # --- debug: save ROI overlay for first batch each epoch ---
+            if epoch % 1 == 0 and n_train == 0:  # first batch only (n_train==0)
+                # save up to 4 examples
+                for k in range(min(4, len(img_paths))):
+                    try:
+                        pil = Image.open(img_paths[k]).convert("RGB")
+                        ov = debug_overlay(pil, out_hw=IMG_SIZE_HW)
+                        out_path = os.path.join(DEBUG_DIR, f"e{epoch:03d}_k{k}_{seqs[k]}.png")
+                        ov.save(out_path)
+                    except Exception as e:
+                        print(f"[WARN] debug overlay failed for {img_paths[k]}: {e}")
 
             optimizer.zero_grad(set_to_none=True)
 
@@ -278,7 +295,7 @@ def main():
         # per-seq stats
         per_seq = {}
         with torch.no_grad():
-            for x, y_norm, seqs, y_cmd, _y_raw in val_loader:
+            for x, y_norm, seqs, y_cmd, _y_raw, img_paths in val_loader:
                 x = x.to(device, non_blocking=pin)
                 y_norm = y_norm.to(device, non_blocking=pin)
 
