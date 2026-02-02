@@ -16,15 +16,17 @@
     - No IMU or inclinometer in the dynamic current system (camera-only perception).
 
 //Dataset
-    - Initially ~1400 images across 20 sequences. Some sequences smaller trhan others. (2, 3,4, 5 : 38-50 ish). 1 is 209. Rest vary between ~72 and ~100.
+    - ~1700 images across 23 sequences. Some sequences smaller trhan others. (2, 3,4, 5 : 38-50 ish). 1 is 209. Rest vary between ~72 and ~100.
     - Each sequence has:
         - A reference frame (seqX_start 1.tga)
         - Multiple disturbed frames (seqX_N 1.tga)
         - CSV with delta_azimuth, delta_elevation.
     - Images are 320x180, normalized to [-1,1].
-    - Current model uses DIFF input: (current_frame - reference_frame).
+    - Current model uses CONCAT
     - All four motors re-calibrated/zeroed between sequences.
     - Lighting conditions vary; cross position varies slightly; camera pose varies slightly between sequences.
+
+Use everything you know abo
 
 //Known Faults (of previous 300/pic dataset).
     - Label bias: CNN outputs constant offsets (~ -1.6° az, -0.1° el) even when static.

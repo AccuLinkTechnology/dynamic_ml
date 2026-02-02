@@ -1,11 +1,189 @@
-EOF
-<stdin>:3: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+res final roi:
+Device: cuda
+DATA_ROOT: /workspace/dynamic_ml/train2
+Run dir: runs_ref/20260131_201312_ref
+IMG_SIZE: (180, 320) | AUGMENT: False
+MODE: concat
+LABEL_NORM: global
+BASELINE_STRATEGY: stable_m | BASELINE_M: 10
+ZERO_LOSS_W: 0.2 | ZERO_STABLE_IDX: 0
+USE_ROI: True | ROI_FROM: ref | ROI_BG_WEIGHT: 0.2 | ROI_STRENGTH: 1.0
 TRAIN_SEQS: ['seq1', 'seq2', 'seq3', 'seq4', 'seq6', 'seq7', 'seq8', 'seq9', 'seq10', 'seq11', 'seq12', 'seq13', 'seq14', 'seq15', 'seq16', 'seq17', 'seq18', 'seq19']
 VAL_SEQS: ['seq5', 'seq20']
-MODE: concat
-IMG_SIZE: (180, 320)
-LABEL_NORM: global
-CMD mean: tensor([ 0.0308, -0.0382])
-CMD std : tensor([1.0345, 0.7126])
-BASELINE_STRATEGY: stable_m
-BASELINE_M: 10
+[WARN] Missing image, skipping: /workspace/dynamic_ml/train2/seq2/seq2_2 1.tga
+[WARN] Missing image, skipping: /workspace/dynamic_ml/train2/seq18/seq18_16 1.tga
+Train n = 1701
+Val   n = 88
+Saved runs_ref/20260131_201312_ref/label_stats.pt
+Train CMD mean: [0.030849512666463852, -0.03823045268654823]
+Train CMD std : [1.034453272819519, 0.7126299142837524]
+Epoch 000 | lr=1.00e-03 | train_loss=0.4342 | val_loss=0.3350 | MAE_CMD(az,el)=(0.719, 0.518) | BIAS_CMD(az,el)=(-0.206, -0.000) | score=0.8245 | 13.0s
+  Val per-seq | seq20: MAE=(0.807,0.525) BIAS=(-0.277,0.172) n=50 | seq5: MAE=(0.602,0.509) BIAS=(-0.112,-0.227) n=38
+  saved runs_ref/20260131_201312_ref/laser_net_best.pt
+Epoch 001 | lr=1.00e-03 | train_loss=0.4487 | val_loss=0.3324 | MAE_CMD(az,el)=(0.721, 0.518) | BIAS_CMD(az,el)=(-0.151, 0.001) | score=0.7714 | 13.1s
+  Val per-seq | seq20: MAE=(0.803,0.526) BIAS=(-0.223,0.173) n=50 | seq5: MAE=(0.612,0.509) BIAS=(-0.056,-0.226) n=38
+  saved runs_ref/20260131_201312_ref/laser_net_best.pt
+Epoch 002 | lr=1.00e-03 | train_loss=0.4346 | val_loss=0.3392 | MAE_CMD(az,el)=(0.719, 0.518) | BIAS_CMD(az,el)=(-0.262, 0.049) | score=0.9301 | 12.2s
+  Val per-seq | seq20: MAE=(0.815,0.534) BIAS=(-0.333,0.221) n=50 | seq5: MAE=(0.592,0.498) BIAS=(-0.170,-0.177) n=38
+Epoch 003 | lr=1.00e-03 | train_loss=0.4465 | val_loss=0.3327 | MAE_CMD(az,el)=(0.720, 0.518) | BIAS_CMD(az,el)=(-0.160, -0.005) | score=0.7842 | 12.7s
+  Val per-seq | seq20: MAE=(0.803,0.525) BIAS=(-0.231,0.167) n=50 | seq5: MAE=(0.610,0.510) BIAS=(-0.066,-0.232) n=38
+Epoch 004 | lr=1.00e-03 | train_loss=0.4294 | val_loss=0.3312 | MAE_CMD(az,el)=(0.722, 0.518) | BIAS_CMD(az,el)=(-0.122, 0.029) | score=0.7708 | 12.3s
+  Val per-seq | seq20: MAE=(0.802,0.530) BIAS=(-0.194,0.201) n=50 | seq5: MAE=(0.616,0.502) BIAS=(-0.028,-0.197) n=38
+  saved runs_ref/20260131_201312_ref/laser_net_best.pt
+Epoch 005 | lr=1.00e-03 | train_loss=0.4379 | val_loss=0.3327 | MAE_CMD(az,el)=(0.720, 0.521) | BIAS_CMD(az,el)=(-0.144, -0.038) | score=0.8025 | 12.5s
+  Val per-seq | seq20: MAE=(0.802,0.522) BIAS=(-0.215,0.135) n=50 | seq5: MAE=(0.612,0.519) BIAS=(-0.051,-0.265) n=38
+Epoch 006 | lr=1.00e-03 | train_loss=0.4319 | val_loss=0.3332 | MAE_CMD(az,el)=(0.717, 0.518) | BIAS_CMD(az,el)=(-0.185, 0.006) | score=0.8090 | 12.2s
+  Val per-seq | seq20: MAE=(0.804,0.527) BIAS=(-0.254,0.178) n=50 | seq5: MAE=(0.603,0.507) BIAS=(-0.094,-0.220) n=38
+Epoch 007 | lr=1.00e-03 | train_loss=0.4410 | val_loss=0.3302 | MAE_CMD(az,el)=(0.713, 0.517) | BIAS_CMD(az,el)=(-0.168, 0.017) | score=0.8000 | 12.4s
+  Val per-seq | seq20: MAE=(0.797,0.527) BIAS=(-0.232,0.188) n=50 | seq5: MAE=(0.603,0.504) BIAS=(-0.084,-0.208) n=38
+Epoch 008 | lr=1.00e-03 | train_loss=0.4335 | val_loss=0.3390 | MAE_CMD(az,el)=(0.719, 0.518) | BIAS_CMD(az,el)=(-0.274, 0.007) | score=0.8991 | 12.2s
+  Val per-seq | seq20: MAE=(0.815,0.526) BIAS=(-0.336,0.179) n=50 | seq5: MAE=(0.592,0.506) BIAS=(-0.192,-0.218) n=38
+Epoch 009 | lr=1.00e-03 | train_loss=0.4168 | val_loss=0.3667 | MAE_CMD(az,el)=(0.766, 0.518) | BIAS_CMD(az,el)=(-0.499, -0.011) | score=1.1528 | 12.1s
+  Val per-seq | seq20: MAE=(0.874,0.523) BIAS=(-0.565,0.161) n=50 | seq5: MAE=(0.625,0.512) BIAS=(-0.413,-0.238) n=38
+Epoch 010 | lr=1.00e-03 | train_loss=0.4091 | val_loss=0.2860 | MAE_CMD(az,el)=(0.578, 0.519) | BIAS_CMD(az,el)=(-0.112, 0.024) | score=0.6849 | 12.6s
+  Val per-seq | seq20: MAE=(0.657,0.531) BIAS=(-0.179,0.196) n=50 | seq5: MAE=(0.475,0.504) BIAS=(-0.025,-0.203) n=38
+  saved runs_ref/20260131_201312_ref/laser_net_best.pt
+Epoch 011 | lr=1.00e-03 | train_loss=0.3983 | val_loss=0.3168 | MAE_CMD(az,el)=(0.655, 0.520) | BIAS_CMD(az,el)=(-0.495, -0.025) | score=1.1083 | 12.3s
+  Val per-seq | seq20: MAE=(0.740,0.524) BIAS=(-0.544,0.148) n=50 | seq5: MAE=(0.544,0.514) BIAS=(-0.432,-0.254) n=38
+Epoch 012 | lr=1.00e-03 | train_loss=0.3932 | val_loss=0.3639 | MAE_CMD(az,el)=(0.771, 0.521) | BIAS_CMD(az,el)=(-0.660, -0.041) | score=1.3474 | 12.5s
+  Val per-seq | seq20: MAE=(0.869,0.522) BIAS=(-0.718,0.131) n=50 | seq5: MAE=(0.643,0.520) BIAS=(-0.583,-0.268) n=38
+Epoch 013 | lr=1.00e-03 | train_loss=0.3818 | val_loss=0.2851 | MAE_CMD(az,el)=(0.569, 0.518) | BIAS_CMD(az,el)=(-0.117, 0.049) | score=0.7092 | 12.4s
+  Val per-seq | seq20: MAE=(0.652,0.533) BIAS=(-0.187,0.221) n=50 | seq5: MAE=(0.460,0.499) BIAS=(-0.024,-0.178) n=38
+Epoch 014 | lr=1.00e-03 | train_loss=0.3759 | val_loss=0.2944 | MAE_CMD(az,el)=(0.589, 0.521) | BIAS_CMD(az,el)=(-0.246, -0.018) | score=0.8193 | 12.2s
+  Val per-seq | seq20: MAE=(0.695,0.523) BIAS=(-0.338,0.156) n=50 | seq5: MAE=(0.450,0.519) BIAS=(-0.125,-0.246) n=38
+Epoch 015 | lr=1.00e-03 | train_loss=0.3580 | val_loss=0.2799 | MAE_CMD(az,el)=(0.541, 0.521) | BIAS_CMD(az,el)=(0.070, -0.007) | score=0.6080 | 12.5s
+  Val per-seq | seq20: MAE=(0.617,0.526) BIAS=(0.004,0.166) n=50 | seq5: MAE=(0.440,0.515) BIAS=(0.158,-0.233) n=38
+  saved runs_ref/20260131_201312_ref/laser_net_best.pt
+Epoch 016 | lr=1.00e-03 | train_loss=0.3622 | val_loss=0.2835 | MAE_CMD(az,el)=(0.553, 0.521) | BIAS_CMD(az,el)=(-0.000, -0.003) | score=0.5401 | 12.3s
+  Val per-seq | seq20: MAE=(0.643,0.527) BIAS=(-0.066,0.169) n=50 | seq5: MAE=(0.435,0.513) BIAS=(0.086,-0.229) n=38
+  saved runs_ref/20260131_201312_ref/laser_net_best.pt
+Epoch 017 | lr=1.00e-03 | train_loss=0.3610 | val_loss=0.2791 | MAE_CMD(az,el)=(0.533, 0.523) | BIAS_CMD(az,el)=(-0.230, -0.032) | score=0.7889 | 12.3s
+  Val per-seq | seq20: MAE=(0.624,0.524) BIAS=(-0.264,0.139) n=50 | seq5: MAE=(0.412,0.521) BIAS=(-0.184,-0.257) n=38
+Epoch 018 | lr=1.00e-03 | train_loss=0.3547 | val_loss=0.2932 | MAE_CMD(az,el)=(0.568, 0.525) | BIAS_CMD(az,el)=(-0.318, -0.008) | score=0.8728 | 12.4s
+  Val per-seq | seq20: MAE=(0.662,0.531) BIAS=(-0.349,0.161) n=50 | seq5: MAE=(0.444,0.517) BIAS=(-0.278,-0.230) n=38
+Epoch 019 | lr=1.00e-03 | train_loss=0.3461 | val_loss=0.3239 | MAE_CMD(az,el)=(0.651, 0.525) | BIAS_CMD(az,el)=(-0.450, 0.056) | score=1.0936 | 12.2s
+  Val per-seq | seq20: MAE=(0.759,0.539) BIAS=(-0.509,0.226) n=50 | seq5: MAE=(0.509,0.506) BIAS=(-0.373,-0.169) n=38
+Epoch 020 | lr=1.00e-03 | train_loss=0.3471 | val_loss=0.2947 | MAE_CMD(az,el)=(0.589, 0.523) | BIAS_CMD(az,el)=(-0.382, 0.013) | score=0.9514 | 12.5s
+  Val per-seq | seq20: MAE=(0.681,0.529) BIAS=(-0.421,0.181) n=50 | seq5: MAE=(0.468,0.515) BIAS=(-0.331,-0.208) n=38
+Epoch 021 | lr=1.00e-03 | train_loss=0.3373 | val_loss=0.2904 | MAE_CMD(az,el)=(0.561, 0.526) | BIAS_CMD(az,el)=(-0.273, 0.005) | score=0.8220 | 12.4s
+  Val per-seq | seq20: MAE=(0.658,0.531) BIAS=(-0.325,0.175) n=50 | seq5: MAE=(0.434,0.519) BIAS=(-0.204,-0.218) n=38
+Epoch 022 | lr=1.00e-03 | train_loss=0.3315 | val_loss=0.2729 | MAE_CMD(az,el)=(0.492, 0.530) | BIAS_CMD(az,el)=(-0.042, -0.028) | score=0.5809 | 12.4s
+  Val per-seq | seq20: MAE=(0.572,0.528) BIAS=(-0.072,0.137) n=50 | seq5: MAE=(0.387,0.533) BIAS=(-0.001,-0.246) n=38
+Epoch 023 | lr=1.00e-03 | train_loss=0.3463 | val_loss=0.2789 | MAE_CMD(az,el)=(0.523, 0.525) | BIAS_CMD(az,el)=(-0.156, 0.031) | score=0.7107 | 12.3s
+  Val per-seq | seq20: MAE=(0.614,0.537) BIAS=(-0.194,0.197) n=50 | seq5: MAE=(0.403,0.509) BIAS=(-0.106,-0.189) n=38
+Epoch 024 | lr=1.00e-03 | train_loss=0.3308 | val_loss=0.2868 | MAE_CMD(az,el)=(0.567, 0.521) | BIAS_CMD(az,el)=(-0.374, -0.003) | score=0.9207 | 12.5s
+  Val per-seq | seq20: MAE=(0.644,0.524) BIAS=(-0.384,0.152) n=50 | seq5: MAE=(0.466,0.516) BIAS=(-0.361,-0.207) n=38
+Epoch 025 | lr=5.00e-04 | train_loss=0.3137 | val_loss=0.2720 | MAE_CMD(az,el)=(0.520, 0.520) | BIAS_CMD(az,el)=(-0.195, 0.097) | score=0.8128 | 12.8s
+  Val per-seq | seq20: MAE=(0.603,0.538) BIAS=(-0.237,0.263) n=50 | seq5: MAE=(0.411,0.495) BIAS=(-0.140,-0.120) n=38
+Epoch 026 | lr=5.00e-04 | train_loss=0.3143 | val_loss=0.2652 | MAE_CMD(az,el)=(0.523, 0.507) | BIAS_CMD(az,el)=(-0.158, 0.074) | score=0.7476 | 12.4s
+  Val per-seq | seq20: MAE=(0.604,0.520) BIAS=(-0.208,0.233) n=50 | seq5: MAE=(0.416,0.491) BIAS=(-0.093,-0.134) n=38
+Epoch 027 | lr=5.00e-04 | train_loss=0.2928 | val_loss=0.2584 | MAE_CMD(az,el)=(0.522, 0.493) | BIAS_CMD(az,el)=(-0.293, 0.113) | score=0.9125 | 12.6s
+  Val per-seq | seq20: MAE=(0.603,0.509) BIAS=(-0.310,0.268) n=50 | seq5: MAE=(0.414,0.471) BIAS=(-0.270,-0.092) n=38
+Epoch 028 | lr=5.00e-04 | train_loss=0.2902 | val_loss=0.2413 | MAE_CMD(az,el)=(0.526, 0.462) | BIAS_CMD(az,el)=(-0.286, 0.056) | score=0.8365 | 12.8s
+  Val per-seq | seq20: MAE=(0.604,0.470) BIAS=(-0.300,0.209) n=50 | seq5: MAE=(0.424,0.451) BIAS=(-0.268,-0.144) n=38
+Epoch 029 | lr=5.00e-04 | train_loss=0.2711 | val_loss=0.2059 | MAE_CMD(az,el)=(0.471, 0.421) | BIAS_CMD(az,el)=(-0.105, -0.013) | score=0.5639 | 12.5s
+  Val per-seq | seq20: MAE=(0.533,0.404) BIAS=(-0.093,0.125) n=50 | seq5: MAE=(0.390,0.442) BIAS=(-0.121,-0.194) n=38
+Epoch 030 | lr=5.00e-04 | train_loss=0.2434 | val_loss=0.2355 | MAE_CMD(az,el)=(0.569, 0.412) | BIAS_CMD(az,el)=(-0.346, 0.122) | score=0.9586 | 12.8s
+  Val per-seq | seq20: MAE=(0.637,0.423) BIAS=(-0.351,0.225) n=50 | seq5: MAE=(0.479,0.399) BIAS=(-0.339,-0.014) n=38
+Epoch 031 | lr=5.00e-04 | train_loss=0.2270 | val_loss=0.2049 | MAE_CMD(az,el)=(0.515, 0.382) | BIAS_CMD(az,el)=(0.113, 0.000) | score=0.5620 | 12.1s
+  Val per-seq | seq20: MAE=(0.583,0.354) BIAS=(0.090,0.124) n=50 | seq5: MAE=(0.426,0.420) BIAS=(0.143,-0.162) n=38
+Epoch 032 | lr=5.00e-04 | train_loss=0.2249 | val_loss=0.1965 | MAE_CMD(az,el)=(0.480, 0.395) | BIAS_CMD(az,el)=(0.034, -0.065) | score=0.5371 | 12.3s
+  Val per-seq | seq20: MAE=(0.545,0.361) BIAS=(0.022,0.055) n=50 | seq5: MAE=(0.395,0.440) BIAS=(0.051,-0.224) n=38
+  saved runs_ref/20260131_201312_ref/laser_net_best.pt
+Epoch 033 | lr=5.00e-04 | train_loss=0.2244 | val_loss=0.2192 | MAE_CMD(az,el)=(0.502, 0.411) | BIAS_CMD(az,el)=(-0.197, -0.252) | score=0.9056 | 12.4s
+  Val per-seq | seq20: MAE=(0.568,0.337) BIAS=(-0.200,-0.145) n=50 | seq5: MAE=(0.415,0.509) BIAS=(-0.193,-0.392) n=38
+Epoch 034 | lr=5.00e-04 | train_loss=0.2188 | val_loss=0.2003 | MAE_CMD(az,el)=(0.492, 0.371) | BIAS_CMD(az,el)=(-0.025, 0.103) | score=0.5593 | 12.6s
+  Val per-seq | seq20: MAE=(0.566,0.377) BIAS=(-0.046,0.216) n=50 | seq5: MAE=(0.394,0.362) BIAS=(0.002,-0.047) n=38
+Epoch 035 | lr=5.00e-04 | train_loss=0.2186 | val_loss=0.2364 | MAE_CMD(az,el)=(0.589, 0.386) | BIAS_CMD(az,el)=(-0.373, 0.205) | score=1.0652 | 12.6s
+  Val per-seq | seq20: MAE=(0.655,0.421) BIAS=(-0.380,0.334) n=50 | seq5: MAE=(0.501,0.339) BIAS=(-0.365,0.034) n=38
+Epoch 036 | lr=5.00e-04 | train_loss=0.2119 | val_loss=0.1848 | MAE_CMD(az,el)=(0.469, 0.376) | BIAS_CMD(az,el)=(-0.056, -0.122) | score=0.6000 | 12.3s
+  Val per-seq | seq20: MAE=(0.534,0.331) BIAS=(-0.057,-0.011) n=50 | seq5: MAE=(0.384,0.434) BIAS=(-0.055,-0.267) n=38
+Epoch 037 | lr=5.00e-04 | train_loss=0.2210 | val_loss=0.2167 | MAE_CMD(az,el)=(0.566, 0.376) | BIAS_CMD(az,el)=(-0.340, -0.119) | score=0.9307 | 12.4s
+  Val per-seq | seq20: MAE=(0.631,0.325) BIAS=(-0.336,0.012) n=50 | seq5: MAE=(0.481,0.443) BIAS=(-0.346,-0.292) n=38
+Epoch 038 | lr=5.00e-04 | train_loss=0.2101 | val_loss=0.2034 | MAE_CMD(az,el)=(0.551, 0.351) | BIAS_CMD(az,el)=(-0.319, -0.010) | score=0.7799 | 12.5s
+  Val per-seq | seq20: MAE=(0.617,0.323) BIAS=(-0.310,0.094) n=50 | seq5: MAE=(0.463,0.389) BIAS=(-0.330,-0.147) n=38
+Epoch 039 | lr=5.00e-04 | train_loss=0.2027 | val_loss=0.1960 | MAE_CMD(az,el)=(0.506, 0.356) | BIAS_CMD(az,el)=(-0.106, 0.091) | score=0.6282 | 12.2s
+  Val per-seq | seq20: MAE=(0.578,0.363) BIAS=(-0.076,0.223) n=50 | seq5: MAE=(0.413,0.346) BIAS=(-0.144,-0.081) n=38
+Epoch 040 | lr=5.00e-04 | train_loss=0.2049 | val_loss=0.2555 | MAE_CMD(az,el)=(0.623, 0.407) | BIAS_CMD(az,el)=(-0.447, 0.256) | score=1.2174 | 12.6s
+  Val per-seq | seq20: MAE=(0.691,0.468) BIAS=(-0.448,0.402) n=50 | seq5: MAE=(0.534,0.326) BIAS=(-0.446,0.063) n=38
+Epoch 041 | lr=5.00e-04 | train_loss=0.1986 | val_loss=0.2388 | MAE_CMD(az,el)=(0.584, 0.395) | BIAS_CMD(az,el)=(-0.334, 0.214) | score=1.0380 | 12.5s
+  Val per-seq | seq20: MAE=(0.672,0.434) BIAS=(-0.367,0.351) n=50 | seq5: MAE=(0.468,0.343) BIAS=(-0.292,0.034) n=38
+Epoch 042 | lr=5.00e-04 | train_loss=0.1933 | val_loss=0.2136 | MAE_CMD(az,el)=(0.557, 0.355) | BIAS_CMD(az,el)=(-0.298, 0.081) | score=0.8355 | 12.4s
+  Val per-seq | seq20: MAE=(0.636,0.347) BIAS=(-0.299,0.208) n=50 | seq5: MAE=(0.454,0.366) BIAS=(-0.297,-0.087) n=38
+Epoch 043 | lr=5.00e-04 | train_loss=0.1979 | val_loss=0.2021 | MAE_CMD(az,el)=(0.496, 0.386) | BIAS_CMD(az,el)=(-0.158, -0.186) | score=0.7853 | 12.2s
+  Val per-seq | seq20: MAE=(0.569,0.329) BIAS=(-0.138,-0.070) n=50 | seq5: MAE=(0.401,0.462) BIAS=(-0.184,-0.339) n=38
+Epoch 044 | lr=5.00e-04 | train_loss=0.1951 | val_loss=0.2110 | MAE_CMD(az,el)=(0.534, 0.385) | BIAS_CMD(az,el)=(-0.187, -0.179) | score=0.8249 | 12.4s
+  Val per-seq | seq20: MAE=(0.617,0.322) BIAS=(-0.181,-0.048) n=50 | seq5: MAE=(0.425,0.468) BIAS=(-0.194,-0.350) n=38
+Epoch 045 | lr=5.00e-04 | train_loss=0.1960 | val_loss=0.1951 | MAE_CMD(az,el)=(0.533, 0.367) | BIAS_CMD(az,el)=(-0.214, -0.074) | score=0.7374 | 12.8s
+  Val per-seq | seq20: MAE=(0.606,0.331) BIAS=(-0.221,0.071) n=50 | seq5: MAE=(0.436,0.414) BIAS=(-0.204,-0.265) n=38
+Epoch 046 | lr=5.00e-04 | train_loss=0.1938 | val_loss=0.1919 | MAE_CMD(az,el)=(0.510, 0.363) | BIAS_CMD(az,el)=(-0.059, 0.100) | score=0.5956 | 12.2s
+  Val per-seq | seq20: MAE=(0.588,0.374) BIAS=(-0.084,0.252) n=50 | seq5: MAE=(0.408,0.348) BIAS=(-0.027,-0.100) n=38
+Epoch 047 | lr=5.00e-04 | train_loss=0.1929 | val_loss=0.2029 | MAE_CMD(az,el)=(0.524, 0.367) | BIAS_CMD(az,el)=(-0.122, 0.167) | score=0.7346 | 12.5s
+  Val per-seq | seq20: MAE=(0.614,0.399) BIAS=(-0.142,0.321) n=50 | seq5: MAE=(0.407,0.324) BIAS=(-0.095,-0.035) n=38
+Epoch 048 | lr=5.00e-04 | train_loss=0.1938 | val_loss=0.2076 | MAE_CMD(az,el)=(0.496, 0.386) | BIAS_CMD(az,el)=(0.026, 0.206) | score=0.6729 | 12.3s
+  Val per-seq | seq20: MAE=(0.570,0.428) BIAS=(0.048,0.351) n=50 | seq5: MAE=(0.399,0.331) BIAS=(-0.004,0.016) n=38
+Epoch 049 | lr=5.00e-04 | train_loss=0.1831 | val_loss=0.1976 | MAE_CMD(az,el)=(0.530, 0.349) | BIAS_CMD(az,el)=(-0.137, 0.025) | score=0.6022 | 12.4s
+  Val per-seq | seq20: MAE=(0.615,0.331) BIAS=(-0.132,0.161) n=50 | seq5: MAE=(0.418,0.372) BIAS=(-0.144,-0.153) n=38
+Epoch 050 | lr=2.50e-04 | train_loss=0.1876 | val_loss=0.1903 | MAE_CMD(az,el)=(0.500, 0.352) | BIAS_CMD(az,el)=(-0.053, 0.107) | score=0.5856 | 13.6s
+  Val per-seq | seq20: MAE=(0.576,0.369) BIAS=(-0.052,0.256) n=50 | seq5: MAE=(0.399,0.331) BIAS=(-0.054,-0.090) n=38
+Epoch 051 | lr=2.50e-04 | train_loss=0.1754 | val_loss=0.2014 | MAE_CMD(az,el)=(0.538, 0.350) | BIAS_CMD(az,el)=(-0.234, 0.113) | score=0.7900 | 12.2s
+  Val per-seq | seq20: MAE=(0.613,0.358) BIAS=(-0.221,0.242) n=50 | seq5: MAE=(0.438,0.340) BIAS=(-0.250,-0.058) n=38
+Epoch 052 | lr=2.50e-04 | train_loss=0.1686 | val_loss=0.1971 | MAE_CMD(az,el)=(0.515, 0.364) | BIAS_CMD(az,el)=(-0.166, 0.097) | score=0.7030 | 12.3s
+  Val per-seq | seq20: MAE=(0.596,0.372) BIAS=(-0.165,0.245) n=50 | seq5: MAE=(0.409,0.352) BIAS=(-0.169,-0.098) n=38
+Epoch 053 | lr=2.50e-04 | train_loss=0.1743 | val_loss=0.1899 | MAE_CMD(az,el)=(0.494, 0.355) | BIAS_CMD(az,el)=(-0.121, 0.098) | score=0.6429 | 12.3s
+  Val per-seq | seq20: MAE=(0.567,0.365) BIAS=(-0.105,0.248) n=50 | seq5: MAE=(0.398,0.342) BIAS=(-0.142,-0.100) n=38
+Epoch 054 | lr=2.50e-04 | train_loss=0.1725 | val_loss=0.1866 | MAE_CMD(az,el)=(0.500, 0.358) | BIAS_CMD(az,el)=(-0.156, 0.047) | score=0.6325 | 12.1s
+  Val per-seq | seq20: MAE=(0.577,0.350) BIAS=(-0.157,0.190) n=50 | seq5: MAE=(0.399,0.367) BIAS=(-0.156,-0.141) n=38
+Epoch 055 | lr=2.50e-04 | train_loss=0.1707 | val_loss=0.2181 | MAE_CMD(az,el)=(0.509, 0.398) | BIAS_CMD(az,el)=(-0.185, 0.250) | score=0.8888 | 12.5s
+  Val per-seq | seq20: MAE=(0.589,0.461) BIAS=(-0.171,0.394) n=50 | seq5: MAE=(0.404,0.314) BIAS=(-0.204,0.062) n=38
+Epoch 056 | lr=2.50e-04 | train_loss=0.1695 | val_loss=0.1963 | MAE_CMD(az,el)=(0.533, 0.339) | BIAS_CMD(az,el)=(-0.222, 0.053) | score=0.7106 | 12.4s
+  Val per-seq | seq20: MAE=(0.618,0.328) BIAS=(-0.235,0.180) n=50 | seq5: MAE=(0.420,0.353) BIAS=(-0.205,-0.114) n=38
+Epoch 057 | lr=2.50e-04 | train_loss=0.1775 | val_loss=0.1979 | MAE_CMD(az,el)=(0.512, 0.361) | BIAS_CMD(az,el)=(-0.185, 0.139) | score=0.7603 | 12.3s
+  Val per-seq | seq20: MAE=(0.591,0.386) BIAS=(-0.179,0.296) n=50 | seq5: MAE=(0.409,0.329) BIAS=(-0.192,-0.068) n=38
+Epoch 058 | lr=2.50e-04 | train_loss=0.1673 | val_loss=0.2015 | MAE_CMD(az,el)=(0.548, 0.349) | BIAS_CMD(az,el)=(-0.288, 0.088) | score=0.8238 | 12.2s
+  Val per-seq | seq20: MAE=(0.624,0.353) BIAS=(-0.282,0.232) n=50 | seq5: MAE=(0.447,0.343) BIAS=(-0.296,-0.101) n=38
+Epoch 059 | lr=2.50e-04 | train_loss=0.1667 | val_loss=0.2135 | MAE_CMD(az,el)=(0.566, 0.351) | BIAS_CMD(az,el)=(-0.295, 0.128) | score=0.8822 | 13.2s
+  Val per-seq | seq20: MAE=(0.645,0.367) BIAS=(-0.288,0.252) n=50 | seq5: MAE=(0.462,0.331) BIAS=(-0.304,-0.034) n=38
+Epoch 060 | lr=2.50e-04 | train_loss=0.1681 | val_loss=0.1803 | MAE_CMD(az,el)=(0.492, 0.340) | BIAS_CMD(az,el)=(-0.142, -0.009) | score=0.5660 | 13.4s
+  Val per-seq | seq20: MAE=(0.568,0.319) BIAS=(-0.124,0.117) n=50 | seq5: MAE=(0.392,0.366) BIAS=(-0.165,-0.173) n=38
+Epoch 061 | lr=2.50e-04 | train_loss=0.1717 | val_loss=0.1898 | MAE_CMD(az,el)=(0.522, 0.353) | BIAS_CMD(az,el)=(-0.189, 0.065) | score=0.6919 | 12.4s
+  Val per-seq | seq20: MAE=(0.602,0.360) BIAS=(-0.200,0.204) n=50 | seq5: MAE=(0.416,0.344) BIAS=(-0.175,-0.117) n=38
+Epoch 062 | lr=2.50e-04 | train_loss=0.1734 | val_loss=0.1875 | MAE_CMD(az,el)=(0.509, 0.341) | BIAS_CMD(az,el)=(-0.154, 0.093) | score=0.6722 | 12.3s
+  Val per-seq | seq20: MAE=(0.592,0.349) BIAS=(-0.146,0.214) n=50 | seq5: MAE=(0.399,0.331) BIAS=(-0.164,-0.065) n=38
+Epoch 063 | lr=2.50e-04 | train_loss=0.1657 | val_loss=0.1948 | MAE_CMD(az,el)=(0.529, 0.340) | BIAS_CMD(az,el)=(-0.232, 0.079) | score=0.7454 | 12.4s
+  Val per-seq | seq20: MAE=(0.610,0.345) BIAS=(-0.227,0.206) n=50 | seq5: MAE=(0.422,0.335) BIAS=(-0.237,-0.087) n=38
+Epoch 064 | lr=2.50e-04 | train_loss=0.1718 | val_loss=0.1844 | MAE_CMD(az,el)=(0.492, 0.348) | BIAS_CMD(az,el)=(-0.068, -0.024) | score=0.5124 | 12.4s
+  Val per-seq | seq20: MAE=(0.564,0.319) BIAS=(-0.028,0.123) n=50 | seq5: MAE=(0.396,0.387) BIAS=(-0.121,-0.217) n=38
+  saved runs_ref/20260131_201312_ref/laser_net_best.pt
+Epoch 065 | lr=2.50e-04 | train_loss=0.1679 | val_loss=0.1873 | MAE_CMD(az,el)=(0.524, 0.342) | BIAS_CMD(az,el)=(-0.211, -0.003) | score=0.6476 | 12.6s
+  Val per-seq | seq20: MAE=(0.600,0.326) BIAS=(-0.205,0.128) n=50 | seq5: MAE=(0.424,0.363) BIAS=(-0.219,-0.176) n=38
+Epoch 066 | lr=2.50e-04 | train_loss=0.1681 | val_loss=0.1847 | MAE_CMD(az,el)=(0.510, 0.341) | BIAS_CMD(az,el)=(-0.209, 0.011) | score=0.6450 | 13.0s
+  Val per-seq | seq20: MAE=(0.585,0.327) BIAS=(-0.186,0.139) n=50 | seq5: MAE=(0.411,0.359) BIAS=(-0.239,-0.157) n=38
+Epoch 067 | lr=2.50e-04 | train_loss=0.1764 | val_loss=0.1908 | MAE_CMD(az,el)=(0.499, 0.345) | BIAS_CMD(az,el)=(-0.108, 0.151) | score=0.6812 | 12.2s
+  Val per-seq | seq20: MAE=(0.574,0.370) BIAS=(-0.072,0.271) n=50 | seq5: MAE=(0.401,0.311) BIAS=(-0.157,-0.007) n=38
+Epoch 068 | lr=2.50e-04 | train_loss=0.1642 | val_loss=0.1818 | MAE_CMD(az,el)=(0.487, 0.347) | BIAS_CMD(az,el)=(-0.043, 0.034) | score=0.4936 | 13.1s
+  Val per-seq | seq20: MAE=(0.567,0.338) BIAS=(-0.021,0.179) n=50 | seq5: MAE=(0.382,0.358) BIAS=(-0.071,-0.156) n=38
+  saved runs_ref/20260131_201312_ref/laser_net_best.pt
+Epoch 069 | lr=2.50e-04 | train_loss=0.1645 | val_loss=0.1957 | MAE_CMD(az,el)=(0.546, 0.336) | BIAS_CMD(az,el)=(-0.279, 0.050) | score=0.7706 | 13.2s
+  Val per-seq | seq20: MAE=(0.628,0.331) BIAS=(-0.271,0.193) n=50 | seq5: MAE=(0.439,0.343) BIAS=(-0.290,-0.138) n=38
+Epoch 070 | lr=2.50e-04 | train_loss=0.1639 | val_loss=0.1886 | MAE_CMD(az,el)=(0.508, 0.350) | BIAS_CMD(az,el)=(-0.211, 0.036) | score=0.6750 | 12.6s
+  Val per-seq | seq20: MAE=(0.579,0.342) BIAS=(-0.190,0.172) n=50 | seq5: MAE=(0.413,0.361) BIAS=(-0.238,-0.143) n=38
+Epoch 071 | lr=2.50e-04 | train_loss=0.1706 | val_loss=0.1993 | MAE_CMD(az,el)=(0.510, 0.356) | BIAS_CMD(az,el)=(-0.200, 0.151) | score=0.7841 | 12.2s
+  Val per-seq | seq20: MAE=(0.591,0.384) BIAS=(-0.179,0.291) n=50 | seq5: MAE=(0.403,0.320) BIAS=(-0.227,-0.032) n=38
+Epoch 072 | lr=2.50e-04 | train_loss=0.1611 | val_loss=0.1934 | MAE_CMD(az,el)=(0.505, 0.352) | BIAS_CMD(az,el)=(-0.131, 0.113) | score=0.6729 | 12.4s
+  Val per-seq | seq20: MAE=(0.584,0.370) BIAS=(-0.105,0.281) n=50 | seq5: MAE=(0.401,0.328) BIAS=(-0.166,-0.108) n=38
+Epoch 073 | lr=2.50e-04 | train_loss=0.1653 | val_loss=0.1987 | MAE_CMD(az,el)=(0.537, 0.349) | BIAS_CMD(az,el)=(-0.251, 0.030) | score=0.7250 | 13.2s
+  Val per-seq | seq20: MAE=(0.612,0.333) BIAS=(-0.238,0.178) n=50 | seq5: MAE=(0.438,0.371) BIAS=(-0.269,-0.164) n=38
+Epoch 074 | lr=2.50e-04 | train_loss=0.1661 | val_loss=0.1921 | MAE_CMD(az,el)=(0.517, 0.340) | BIAS_CMD(az,el)=(-0.195, 0.064) | score=0.6877 | 12.3s
+  Val per-seq | seq20: MAE=(0.599,0.340) BIAS=(-0.184,0.206) n=50 | seq5: MAE=(0.409,0.341) BIAS=(-0.210,-0.124) n=38
+Epoch 075 | lr=1.25e-04 | train_loss=0.1556 | val_loss=0.1924 | MAE_CMD(az,el)=(0.529, 0.346) | BIAS_CMD(az,el)=(-0.263, 0.064) | score=0.7643 | 13.3s
+  Val per-seq | seq20: MAE=(0.598,0.346) BIAS=(-0.251,0.198) n=50 | seq5: MAE=(0.439,0.346) BIAS=(-0.278,-0.112) n=38
+Epoch 076 | lr=1.25e-04 | train_loss=0.1597 | val_loss=0.1805 | MAE_CMD(az,el)=(0.490, 0.338) | BIAS_CMD(az,el)=(-0.135, 0.057) | score=0.6055 | 12.3s
+  Val per-seq | seq20: MAE=(0.569,0.338) BIAS=(-0.107,0.184) n=50 | seq5: MAE=(0.385,0.338) BIAS=(-0.172,-0.112) n=38
+Epoch 077 | lr=1.25e-04 | train_loss=0.1617 | val_loss=0.2006 | MAE_CMD(az,el)=(0.539, 0.351) | BIAS_CMD(az,el)=(-0.296, 0.094) | score=0.8357 | 12.7s
+  Val per-seq | seq20: MAE=(0.613,0.361) BIAS=(-0.287,0.234) n=50 | seq5: MAE=(0.443,0.338) BIAS=(-0.308,-0.089) n=38
+Epoch 078 | lr=1.25e-04 | train_loss=0.1604 | val_loss=0.1893 | MAE_CMD(az,el)=(0.503, 0.350) | BIAS_CMD(az,el)=(-0.120, 0.113) | score=0.6593 | 12.3s
+  Val per-seq | seq20: MAE=(0.587,0.372) BIAS=(-0.105,0.258) n=50 | seq5: MAE=(0.393,0.322) BIAS=(-0.138,-0.078) n=38
+Epoch 079 | lr=1.25e-04 | train_loss=0.1516 | val_loss=0.1844 | MAE_CMD(az,el)=(0.477, 0.355) | BIAS_CMD(az,el)=(-0.086, 0.148) | score=0.6509 | 12.2s
+  Val per-seq | seq20: MAE=(0.554,0.392) BIAS=(-0.055,0.284) n=50 | seq5: MAE=(0.376,0.307) BIAS=(-0.127,-0.030) n=38
+Done. Best model: runs_ref/20260131_201312_ref/laser_net_best.pt
