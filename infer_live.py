@@ -28,7 +28,7 @@ CSV_FILE = "model_predictions.csv"  # Output file for logged predictions
 LOG_ENABLED = True  # Set to False to disable logging
 
 # Correction settings
-USE_CORRECTION = True  # Apply calibrated gain/offset correction
+USE_CORRECTION = False  # Apply calibrated gain/offset correction
 USE_PID = False  # Enable PID for residual error (set True for closed-loop)
 
 
