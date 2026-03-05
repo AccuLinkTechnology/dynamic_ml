@@ -3,6 +3,10 @@ from PIL import Image
 import torchvision.transforms as T
 import torch
 
+#calibrates conversion from float32 onnx to int8 data based on realistic data.
+#calibration data: at some point get this from inference on real frames versus generated data.
+
+
 transform = T.Compose([
     T.Resize((180, 320), interpolation=T.InterpolationMode.BILINEAR),
     T.ToTensor(),
