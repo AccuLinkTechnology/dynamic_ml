@@ -20,7 +20,7 @@ VAL_SEQS = [s.strip() for s in VAL_SEQS if s.strip()]
 
 SEED = int(os.environ.get("SEED", "123"))
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "8"))
-EPOCHS = int(os.environ.get("EPOCHS", "150"))
+EPOCHS = int(os.environ.get("EPOCHS", "80"))
 LR = float(os.environ.get("LR", "1e-3"))
 WEIGHT_DECAY = float(os.environ.get("WEIGHT_DECAY", "1e-4"))
 NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "2"))
