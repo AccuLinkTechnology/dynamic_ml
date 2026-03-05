@@ -15,16 +15,16 @@ from config import (
     IN_CHANNELS, OUT_DIM, USE_TANH_BOUNDING, OUT_SCALE,
 )
 
-VAL_SEQS = os.environ.get("VAL_SEQS", "seq5,seq23,seq20").split(",")
+VAL_SEQS = os.environ.get("VAL_SEQS", "seq1,seq2,seq3,seq4").split(",")
 VAL_SEQS = [s.strip() for s in VAL_SEQS if s.strip()]
 
 SEED = int(os.environ.get("SEED", "123"))
-BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "16"))
-EPOCHS = int(os.environ.get("EPOCHS", "50"))
+BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "8"))
+EPOCHS = int(os.environ.get("EPOCHS", "150"))
 LR = float(os.environ.get("LR", "1e-3"))
 WEIGHT_DECAY = float(os.environ.get("WEIGHT_DECAY", "1e-4"))
-NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "4"))
-PIN_MEMORY = os.environ.get("PIN_MEMORY", "1") == "1"
+NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "2"))
+PIN_MEMORY = os.environ.get("PIN_MEMORY", "0") == "1"
 
 RUN_DIR = os.path.join("runs_train3", time.strftime("%Y%m%d_%H%M%S"))
 os.makedirs(RUN_DIR, exist_ok=True)
@@ -37,7 +37,7 @@ def list_seqs(root: str) -> List[str]:
 @torch.no_grad()
 def evaluate(model, loader, device):
     model.eval()
-    loss_fn = nn.SmoothL1Loss(beta=1.0)
+    loss_fn = nn.MSELoss()
     total_loss = 0.0
     n = 0
     for x, y, _seq, _path in loader:
@@ -83,7 +83,10 @@ def main():
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-    loss_fn = nn.SmoothL1Loss(beta=1.0)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", factor=0.5, patience=10, min_lr=1e-6
+    )
+    loss_fn = nn.MSELoss()
 
     best_val = float("inf")
     best_path = os.path.join(RUN_DIR, "best_model.pt")
@@ -128,9 +131,11 @@ def main():
 
         train_loss = total / max(1, n)
         val_loss = evaluate(model, val_loader, device)
+        scheduler.step(val_loss)
 
+        current_lr = optimizer.param_groups[0]["lr"]
         dt = time.time() - t0
-        print(f"E{epoch:03d} | train={train_loss:.5f} val={val_loss:.5f} | {dt:.1f}s")
+        print(f"E{epoch:03d} | train={train_loss:.5f} val={val_loss:.5f} | lr={current_lr:.2e} | {dt:.1f}s")
 
         if val_loss < best_val:
             best_val = val_loss
@@ -138,7 +143,7 @@ def main():
                 {"epoch": epoch, "model_state_dict": model.state_dict(), "val_loss": val_loss},
                 best_path,
             )
-            print(f"  ✓ Best val: {best_val:.5f}")
+            print(f"  ? Best val: {best_val:.5f}")
 
     print(f"Done. Best model: {best_path}")
 

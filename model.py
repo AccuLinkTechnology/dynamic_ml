@@ -4,12 +4,13 @@ import torch.nn as nn
 
 class LaserNetSimple(nn.Module):
     """
-    Simple CNN baseline (locked-in).
+    Simple CNN baseline.
 
     - Input:  [B, 6, H, W]
     - Output: [B, out_dim] (default 4)
 
-    Optional tanh bounding for safety; can be disabled.
+    Uses spatial pooling (4x7) instead of global average pool to preserve
+    positional information needed for x/y prediction.
     """
     def __init__(
         self,
@@ -44,12 +45,12 @@ class LaserNetSimple(nn.Module):
             block(128, 128, 3, 1, 1),
         )
 
-        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.pool = nn.AdaptiveAvgPool2d((4, 7))  # preserves spatial layout for x/y prediction
 
         self.head = nn.Sequential(
-            nn.Linear(128, 96),
+            nn.Linear(128 * 4 * 7, 256),
             nn.ReLU(inplace=True),
-            nn.Linear(96, self.out_dim),
+            nn.Linear(256, self.out_dim),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

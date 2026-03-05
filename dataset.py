@@ -7,7 +7,7 @@ from PIL import Image
 import pandas as pd
 import torchvision.transforms as T
 
-from config import DEFAULT_IMG_SIZE_HW, IMG_EXT, CSV_REQUIRED_COLUMNS, REF_SUFFIX
+from config import DEFAULT_IMG_SIZE_HW, IMG_EXT, CSV_REQUIRED_COLUMNS, REF_SUFFIX, OUT_SCALE
 
 
 class LaserDataset(Dataset):
@@ -31,7 +31,6 @@ class LaserDataset(Dataset):
 
         H, W = self.img_size_hw
 
-        # Minimal + consistent preprocessing (option 1): Resize + [-1,1]
         self.transform = transform or T.Compose([
             T.Resize((H, W), interpolation=T.InterpolationMode.BILINEAR),
             T.ToTensor(),
@@ -42,7 +41,7 @@ class LaserDataset(Dataset):
         self.samples: List[Tuple[str, torch.Tensor, str, int]] = []
 
         for seq in self.seqs:
-            csv_path = os.path.join(self.csv_root, f"{seq}.csv")
+            csv_path = os.path.join(self.csv_root, seq, f"{seq}.csv")
             seq_dir = os.path.join(self.img_root, seq)
 
             if not os.path.exists(csv_path):
@@ -53,16 +52,22 @@ class LaserDataset(Dataset):
             ref_path = os.path.join(seq_dir, f"{seq}{REF_SUFFIX}{IMG_EXT}")
             if not os.path.exists(ref_path):
                 raise FileNotFoundError(f"Reference image not found: {ref_path}")
+            self.ref_tensor_by_seq[seq] = self.transform(Image.open(ref_path).convert("RGB"))
 
-            ref_img = Image.open(ref_path).convert("RGB")
-            self.ref_tensor_by_seq[seq] = self.transform(ref_img)
-
-            df = pd.read_csv(csv_path)
+            df = pd.read_csv(csv_path, skipinitialspace=True)
             missing = [c for c in CSV_REQUIRED_COLUMNS if c not in df.columns]
             if missing:
                 raise ValueError(f"{csv_path} missing columns: {missing}")
 
             df = df.dropna(subset=CSV_REQUIRED_COLUMNS)
+
+            ref_rows = df[df["pic_number"] == 0]
+            if ref_rows.empty:
+                raise ValueError(f"No pic 0 (reference row) found in {csv_path}")
+            ref_row = ref_rows.iloc[0]
+            ref_label = {c: float(ref_row[c]) for c in ["x", "y", "rotation", "zoom"]}
+
+            df = df[df["pic_number"] != 0]
             skipped = 0
             for _, row in df.iterrows():
                 pic = int(row["pic_number"])
@@ -76,10 +81,10 @@ class LaserDataset(Dataset):
 
                 y = torch.tensor(
                     [
-                        float(row["azimuth"]),
-                        float(row["elevation"]),
-                        float(row["rotation"]),
-                        float(row["distance"]),
+                        (float(row["x"])        - ref_label["x"])        / OUT_SCALE[0],
+                        (float(row["y"])        - ref_label["y"])        / OUT_SCALE[1],
+                        (float(row["rotation"]) - ref_label["rotation"]) / OUT_SCALE[2],
+                        (float(row["zoom"])     - ref_label["zoom"])      / OUT_SCALE[3],
                     ],
                     dtype=torch.float32,
                 )
