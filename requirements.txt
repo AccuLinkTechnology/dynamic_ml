@@ -2,3 +2,5 @@ PIL
 pandas
 torch
 torchvision
+onnxscript
+hailo

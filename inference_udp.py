@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 import socket
@@ -16,6 +17,12 @@ from config import (
 
 WEIGHTS = "/home/acculink/Documents/dynamic_ml/runs_train3/20260304_172025/best_model.pt"
 
+# ?? CALIBRATION SETTINGS (remove this block after collecting data) ????????????
+COLLECT_CALIBRATION = True   # set False or delete this whole block when done
+CALIB_DIR           = "calib_data"
+CALIB_TARGET        = 200    # number of frames to collect
+# ?????????????????????????????????????????????????????????????????????????????
+
 transform = T.Compose([
     T.Resize(DEFAULT_IMG_SIZE_HW, interpolation=T.InterpolationMode.BILINEAR),
     T.ToTensor(),
@@ -30,7 +37,6 @@ def capture_ref(cap) -> torch.Tensor:
     if not ok:
         raise RuntimeError("Could not capture reference frame.")
     return transform(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
-
 
 def main():
     if len(sys.argv) != 2 or sys.argv[1] not in ("live", "udp"):
@@ -57,6 +63,14 @@ def main():
     ref = capture_ref(cap)
     print(f"[REF] Captured. Mode: {mode}. Press 'q' to quit.\n")
 
+    # ?? CALIBRATION SETUP (remove with block above) ???????????????????????????
+    if COLLECT_CALIBRATION:
+        os.makedirs(CALIB_DIR, exist_ok=True)
+        calib_count = len([f for f in os.listdir(CALIB_DIR) if f.endswith(".npy")])
+        print(f"[CALIB] Will collect up to {CALIB_TARGET} frames into '{CALIB_DIR}/' "
+              f"({calib_count} already exist)")
+    # ?????????????????????????????????????????????????????????????????????????
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) if mode == "udp" else None
     target = (UDP_TARGET_IP, UDP_TARGET_PORT)
     last_send = 0.0
@@ -71,6 +85,19 @@ def main():
 
             cur = transform(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
             x_in = torch.cat([cur, cur - ref], dim=0).unsqueeze(0)
+
+            # ?? CALIBRATION COLLECTION (remove with block above) ??????????????
+            if COLLECT_CALIBRATION:
+                calib_count = len([f for f in os.listdir(CALIB_DIR) if f.endswith(".npy")])
+                if calib_count < CALIB_TARGET:
+                    import numpy as np
+                    np.save(f"{CALIB_DIR}/{calib_count:04d}.npy", x_in.numpy())
+                    if calib_count % 50 == 0:
+                        print(f"[CALIB] {calib_count}/{CALIB_TARGET} frames saved")
+                elif calib_count == CALIB_TARGET:
+                    print(f"[CALIB] Done ? {CALIB_TARGET} frames collected in '{CALIB_DIR}/'")
+                    print("[CALIB] You can now set COLLECT_CALIBRATION = False")
+            # ?????????????????????????????????????????????????????????????????
 
             with torch.no_grad():
                 pred = model(x_in)[0] * scale
