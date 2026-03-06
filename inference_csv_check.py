@@ -20,7 +20,7 @@ from config import (
     USE_TANH_BOUNDING, OUT_SCALE,
 )
 
-WEIGHTS = "/home/acculink/Documents/dynamic_ml/runs_train3/20260304_172025/best_model.pt"
+WEIGHTS = "/home/acculink/Documents/dynamic_ml/runs_train3/20260305_094954/best_model.pt"
 
 transform = T.Compose([
     T.Resize(DEFAULT_IMG_SIZE_HW, interpolation=T.InterpolationMode.BILINEAR),

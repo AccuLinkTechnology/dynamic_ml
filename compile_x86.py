@@ -2,9 +2,9 @@ import numpy as np
 import glob
 from hailo_sdk_client import ClientRunner
 
-ONNX  = "best_model.onnx"
+ONNX  = "runs_train3/20260305_094954/best_model.onnx"
 NAME  = "laser_net"
-ARCH  = "hailo8l"
+ARCH  = "hailo8"
 H, W, C = 180, 320, 6
 
 runner = ClientRunner(hw_arch=ARCH)
